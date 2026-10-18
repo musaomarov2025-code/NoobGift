@@ -9,30 +9,31 @@ from config import WITHDRAW_AMOUNTS
 def main_menu_kb():
     builder = InlineKeyboardBuilder()
     
-    # 1-й ряд: Заработать (синяя, если это url, или зеленая, если callback)
+    # 1-й ряд: Заработать (СИНЯЯ)
     builder.row(InlineKeyboardButton(
         text='Заработать звезды', 
         callback_data="menu_earn",
-        icon_custom_emoji_id="6005661956931850799" # ⭐️
+        icon_custom_emoji_id="6005661956931850799",
+        style="primary" # Синяя
     ))
     
     # 2-й ряд: Рефералы / Профиль
     builder.row(
-        InlineKeyboardButton(text='Рефералы', callback_data="menu_refs", icon_custom_emoji_id="5278467510604160626"), # 💰
-        InlineKeyboardButton(text='Профиль', callback_data="menu_profile", icon_custom_emoji_id="5258011929993026890") # 👤
+        InlineKeyboardButton(text='Рефералы', callback_data="menu_refs", icon_custom_emoji_id="5278467510604160626"),
+        InlineKeyboardButton(text='Профиль', callback_data="menu_profile", icon_custom_emoji_id="5258011929993026890")
     )
     
     # 3-й ряд: Вывод / Статистика
     builder.row(
-        InlineKeyboardButton(text='Вывод', callback_data="menu_withdraw", icon_custom_emoji_id="6037408065966312773"), # 🤑
-        InlineKeyboardButton(text='Статистика', callback_data="menu_stats", icon_custom_emoji_id="6154657967317717391") # ↗️
+        InlineKeyboardButton(text='Вывод', callback_data="menu_withdraw", icon_custom_emoji_id="6037408065966312773"),
+        InlineKeyboardButton(text='Статистика', callback_data="menu_stats", icon_custom_emoji_id="6154657967317717391")
     )
     
     # 4-й ряд: Инструкция
     builder.row(InlineKeyboardButton(
         text='Инструкция', 
         callback_data="menu_instruction",
-        icon_custom_emoji_id="5334544901428229844" # ℹ️
+        icon_custom_emoji_id="5334544901428229844"
     ))
     
     return builder.as_markup()
@@ -45,7 +46,7 @@ def back_kb(target="menu_back"):
     builder.row(InlineKeyboardButton(
         text='Назад', 
         callback_data=target,
-        icon_custom_emoji_id="5346230992044574063" # ⬅️
+        icon_custom_emoji_id="5346230992044574063"
     ))
     return builder.as_markup()
 
@@ -57,33 +58,47 @@ def sub_check_kb(channel_link):
     builder.row(InlineKeyboardButton(
         text='Подписаться', 
         url=channel_link,
-        icon_custom_emoji_id="6311812139233316820" # 🤝
+        icon_custom_emoji_id="6311812139233316820"
     ))
     builder.row(InlineKeyboardButton(
         text='Проверить', 
         callback_data="check_sub",
-        icon_custom_emoji_id="5411197345968701560" # ✅
+        icon_custom_emoji_id="5411197345968701560",
+        style="success" # Зеленая
     ))
     return builder.as_markup()
 
 def task_kb(task_url):
     builder = InlineKeyboardBuilder()
-    # Кнопка перехода (синяя)
+    
+    # Кнопка перехода (синяя, так как ссылка)
     builder.row(InlineKeyboardButton(
         text='Сделать задание', 
         url=task_url,
-        icon_custom_emoji_id="5472033358693280429" # 🐶 Собачка с ноутбуком
+        icon_custom_emoji_id="5472033358693280429" # Собачка
     ))
-    # Кнопки Проверить / Пропустить
+    
+    # Кнопки Проверить / Пропустить (цветные)
     builder.row(
-        InlineKeyboardButton(text='Проверить', callback_data="check_task", icon_custom_emoji_id="5251503375207392582"), # ✅
-        InlineKeyboardButton(text='SKIP Пропустить', callback_data="skip_task", icon_custom_emoji_id="5251503375207392582") # Квадратик SKIP (если нужен другой ID, скинь)
+        InlineKeyboardButton(
+            text='Проверить', 
+            callback_data="check_task", 
+            icon_custom_emoji_id="5251503375207392582", # Галочка
+            style="success" # Зеленая
+        ),
+        InlineKeyboardButton(
+            text='Пропустить', 
+            callback_data="skip_task",
+            icon_custom_emoji_id="6311812139233316820", # Тот ID, что ты дал
+            style="danger" # Красная
+        )
     )
+    
     # Кнопка Назад
     builder.row(InlineKeyboardButton(
         text='Назад', 
         callback_data="menu_back",
-        icon_custom_emoji_id="5346230992044574063" # ⬅️
+        icon_custom_emoji_id="5346230992044574063"
     ))
     return builder.as_markup()
 
@@ -94,13 +109,17 @@ def withdraw_kb():
     builder = InlineKeyboardBuilder()
     row_buttons = []
     for amount in WITHDRAW_AMOUNTS:
-        row_buttons.append(InlineKeyboardButton(text=str(amount), callback_data=f"wd_{amount}"))
+        row_buttons.append(InlineKeyboardButton(
+            text=str(amount), 
+            callback_data=f"wd_{amount}",
+            style="primary" # Синие кнопки для сумм
+        ))
     builder.row(*row_buttons)
     
     builder.row(InlineKeyboardButton(
         text='Назад', 
         callback_data="menu_back",
-        icon_custom_emoji_id="5346230992044574063" # ⬅️
+        icon_custom_emoji_id="5346230992044574063"
     ))
     return builder.as_markup()
 
@@ -112,16 +131,17 @@ def stats_kb():
     builder.row(InlineKeyboardButton(
         text='Топ по балансу', 
         callback_data="top_balance",
-        icon_custom_emoji_id="5417924076503062111" # 💰
+        icon_custom_emoji_id="5417924076503062111",
+        style="primary"
     ))
     builder.row(
-        InlineKeyboardButton(text='Топ по реф...', callback_data="top_refs", icon_custom_emoji_id="5280605017043118832"), # 👥
-        InlineKeyboardButton(text='Топ по зараб...', callback_data="top_earn", icon_custom_emoji_id="5460709183496171654") # 🏆
+        InlineKeyboardButton(text='Топ по реф...', callback_data="top_refs", icon_custom_emoji_id="5280605017043118832"),
+        InlineKeyboardButton(text='Топ по зараб...', callback_data="top_earn", icon_custom_emoji_id="5460709183496171654")
     )
     builder.row(InlineKeyboardButton(
         text='Назад', 
         callback_data="menu_back",
-        icon_custom_emoji_id="5346230992044574063" # ⬅️
+        icon_custom_emoji_id="5346230992044574063"
     ))
     return builder.as_markup()
 
@@ -131,7 +151,11 @@ def top_period_kb(top_type, current_period="all"):
     row_filters = []
     for p_code, p_name in periods:
         check = " ✓" if current_period == p_code else ""
-        row_filters.append(InlineKeyboardButton(text=f"{p_name}{check}", callback_data=f"period_{top_type}_{p_code}"))
+        row_filters.append(InlineKeyboardButton(
+            text=f"{p_name}{check}", 
+            callback_data=f"period_{top_type}_{p_code}",
+            style="primary" if current_period == p_code else None
+        ))
     builder.row(*row_filters)
     
     builder.row(

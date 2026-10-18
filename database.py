@@ -1,5 +1,5 @@
 import sqlite3
-from config import DB, TASK_REWARD, REF_BONUS
+from config import DB
 
 def get_conn():
     conn = sqlite3.connect(DB, check_same_thread=False)
@@ -38,15 +38,6 @@ def init_db():
             )
         """)
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                action_type TEXT,
-                amount REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cur.execute("""
             CREATE TABLE IF NOT EXISTS withdrawals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -69,14 +60,40 @@ def init_db():
                 value TEXT
             )
         """)
+        # Таблица промокодов (чеков)
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS ads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT UNIQUE,
-                owner TEXT,
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code TEXT PRIMARY KEY,
+                amount_min REAL,
+                amount_max REAL,
+                max_activations INTEGER,
+                current_activations INTEGER DEFAULT 0,
+                is_task BOOLEAN DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Таблица активаций (чтобы один юзер не активировал дважды)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS promo_activations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT,
+                user_id INTEGER,
+                activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(code, user_id)
+            )
+        """)
+        
+        # Дефолтные настройки
+        defaults = [
+            ("task_reward", "0.45"),
+            ("ref_bonus", "11.0"),
+            ("ref_tasks_required", "5"),
+            ("withdraw_friends", "3"),
+            ("menu_avatar", "")
+        ]
+        for k, v in defaults:
+            cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+            
         conn.commit()
 
 # === ПОЛЬЗОВАТЕЛИ ===
@@ -86,10 +103,7 @@ def get_user(user_id):
 
 def create_user(user_id, username, first_name, referrer_id=None, ad_code=None):
     with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO users (user_id, username, first_name, referrer_id, ad_code) VALUES (?, ?, ?, ?, ?)",
-            (user_id, username, first_name, referrer_id, ad_code)
-        )
+        conn.execute("INSERT INTO users (user_id, username, first_name, referrer_id, ad_code) VALUES (?, ?, ?, ?, ?)", (user_id, username, first_name, referrer_id, ad_code))
         conn.commit()
 
 def update_user_username(user_id, username, first_name):
@@ -100,7 +114,6 @@ def update_user_username(user_id, username, first_name):
 def add_balance(user_id, amount, action_type="task"):
     with get_conn() as conn:
         conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?", (amount, amount, user_id))
-        conn.execute("INSERT INTO history (user_id, action_type, amount) VALUES (?, ?, ?)", (user_id, action_type, amount))
         conn.commit()
 
 def remove_balance(user_id, amount):
@@ -108,29 +121,10 @@ def remove_balance(user_id, amount):
         conn.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
         conn.commit()
 
-def add_ref(user_id):
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET total_refs = total_refs + 1 WHERE user_id = ?", (user_id,))
-        conn.commit()
-
-def confirm_ref(user_id, bonus, tasks_done_by_ref):
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET confirmed_refs = confirmed_refs + 1, balance = balance + ?, total_earned = total_earned + ?, ref_bonus_paid = 1 WHERE user_id = ?", (bonus, bonus, user_id))
-        conn.execute("INSERT INTO history (user_id, action_type, amount) VALUES (?, 'ref_bonus', ?)", (user_id, bonus))
-        conn.commit()
-
-def mark_task_completed(user_id):
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET tasks_completed = tasks_completed + 1 WHERE user_id = ?", (user_id,))
-        conn.commit()
-
 # === ЗАДАНИЯ ===
 def save_task(user_id, service, task_id, link, reward):
     with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO tasks (user_id, service, task_id, link, reward, status) VALUES (?, ?, ?, ?, ?, 'pending')",
-            (user_id, service, task_id, link, reward)
-        )
+        conn.execute("INSERT INTO tasks (user_id, service, task_id, link, reward, status) VALUES (?, ?, ?, ?, ?, 'pending')", (user_id, service, task_id, link, reward))
         conn.commit()
 
 def get_pending_task(user_id):
@@ -146,135 +140,71 @@ def mark_task_status(task_id, status):
         conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (status, task_id))
         conn.commit()
 
-# === ВЫВОД ===
-def create_withdraw(user_id, amount):
+def mark_task_completed(user_id):
     with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO withdrawals (user_id, amount) VALUES (?, ?)", (user_id, amount))
-        conn.commit()
-        return cur.lastrowid
-
-def get_withdraw(withdraw_id):
-    with get_conn() as conn:
-        return conn.execute("SELECT * FROM withdrawals WHERE id = ?", (withdraw_id,)).fetchone()
-
-def update_withdraw_status(withdraw_id, status):
-    with get_conn() as conn:
-        conn.execute("UPDATE withdrawals SET status = ? WHERE id = ?", (status, withdraw_id))
+        conn.execute("UPDATE users SET tasks_completed = tasks_completed + 1 WHERE user_id = ?", (user_id,))
         conn.commit()
 
-# === СПОНСОРЫ ===
-def get_sponsors():
+# === НАСТРОЙКИ ===
+def get_setting(key):
     with get_conn() as conn:
-        return conn.execute("SELECT * FROM sponsors").fetchall()
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row['value'] if row else None
 
-def add_sponsor(name, link, channel_id):
+def set_setting(key, value):
     with get_conn() as conn:
-        conn.execute("INSERT INTO sponsors (channel_name, channel_link, channel_id) VALUES (?, ?, ?)", (name, link, channel_id))
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
         conn.commit()
 
-def delete_sponsor(sponsor_id):
+# === ПРОМОКОДЫ ===
+def create_promo(code, amin, amax, max_act, is_task):
     with get_conn() as conn:
-        conn.execute("DELETE FROM sponsors WHERE id = ?", (sponsor_id,))
+        conn.execute("INSERT INTO promo_codes (code, amount_min, amount_max, max_activations, is_task) VALUES (?, ?, ?, ?, ?)", (code, amin, amax, max_act, is_task))
         conn.commit()
 
-# === СТАТИСТИКА (ОБЩАЯ) ===
+def get_promo(code):
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM promo_codes WHERE code = ?", (code,)).fetchone()
+
+def check_promo_activation(code, user_id):
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM promo_activations WHERE code = ? AND user_id = ?", (code, user_id)).fetchone()
+
+def activate_promo(code, user_id, amount):
+    with get_conn() as conn:
+        conn.execute("INSERT INTO promo_activations (code, user_id) VALUES (?, ?)", (code, user_id))
+        conn.execute("UPDATE promo_codes SET current_activations = current_activations + 1 WHERE code = ?", (code,))
+        conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?", (amount, amount, user_id))
+        conn.commit()
+
+# === СТАТИСТИКА ===
 def get_total_users():
     with get_conn() as conn:
         return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+def get_new_users_today():
+    with get_conn() as conn:
+        return conn.execute("SELECT COUNT(*) FROM users WHERE date(reg_date) = date('now')").fetchone()[0]
+
+def get_total_balance():
+    with get_conn() as conn:
+        return conn.execute("SELECT SUM(balance) FROM users").fetchone()[0] or 0.0
 
 def get_total_withdrawn():
     with get_conn() as conn:
         return conn.execute("SELECT SUM(amount) FROM withdrawals WHERE status = 'paid'").fetchone()[0] or 0.0
 
-def get_all_users():
+def get_total_tasks_done():
     with get_conn() as conn:
-        return conn.execute("SELECT user_id FROM users").fetchall()
+        return conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'done'").fetchone()[0]
 
-# === ТОПЫ ===
-def get_top_balance(limit=10):
+def get_user_referrals(user_id):
     with get_conn() as conn:
-        return conn.execute("SELECT * FROM users ORDER BY balance DESC LIMIT ?", (limit,)).fetchall()
+        return conn.execute("SELECT * FROM users WHERE referrer_id = ?", (user_id,)).fetchall()
 
-def get_user_place_by_balance(user_id):
+def get_user_withdraws(user_id):
     with get_conn() as conn:
-        user_balance = conn.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)).fetchone()['balance']
-        place = conn.execute("SELECT COUNT(*) FROM users WHERE balance > ?", (user_balance,)).fetchone()[0] + 1
-        return place, user_balance
+        return conn.execute("SELECT * FROM withdrawals WHERE user_id = ? ORDER BY id DESC", (user_id,)).fetchall()
 
-def get_top_refs(limit=10, period="all"):
-    with get_conn() as conn:
-        if period == "all":
-            return conn.execute("SELECT * FROM users ORDER BY total_refs DESC LIMIT ?", (limit,)).fetchall()
-        # Для сегодня/недели нужен подсчет по дате регистрации рефералов
-        # Упрощенно: если reg_date подходит
-        query = "SELECT referrer_id, COUNT(*) as cnt FROM users WHERE referrer_id IS NOT NULL"
-        if period == "today":
-            query += " AND date(reg_date) = date('now')"
-        elif period == "week":
-            query += " AND reg_date >= date('now', '-7 days')"
-        query += " GROUP BY referrer_id ORDER BY cnt DESC LIMIT ?"
-        
-        # Возвращаем как объекты юзеров с фиктивным total_refs
-        rows = conn.execute(query, (limit,)).fetchall()
-        res = []
-        for r in rows:
-            u = conn.execute("SELECT * FROM users WHERE user_id = ?", (r['referrer_id'],)).fetchone()
-            if u:
-                u_dict = dict(u)
-                u_dict['total_refs'] = r['cnt']
-                res.append(u_dict)
-        return res
-
-def get_top_earned(limit=10, period="all"):
-    with get_conn() as conn:
-        if period == "all":
-            return conn.execute("SELECT * FROM users ORDER BY total_earned DESC LIMIT ?", (limit,)).fetchall()
-        
-        query = "SELECT user_id, SUM(amount) as total FROM history WHERE action_type IN ('task', 'ref_bonus')"
-        if period == "today":
-            query += " AND date(created_at) = date('now')"
-        elif period == "week":
-            query += " AND created_at >= date('now', '-7 days')"
-        query += " GROUP BY user_id ORDER BY total DESC LIMIT ?"
-        
-        rows = conn.execute(query, (limit,)).fetchall()
-        res = []
-        for r in rows:
-            u = conn.execute("SELECT * FROM users WHERE user_id = ?", (r['user_id'],)).fetchone()
-            if u:
-                u_dict = dict(u)
-                u_dict['total_earned'] = r['total']
-                res.append(u_dict)
-        return res
-
-# === РЕКЛАМА ===
-def add_ad(code, owner):
-    with get_conn() as conn:
-        conn.execute("INSERT INTO ads (code, owner) VALUES (?, ?)", (code, owner))
-        conn.commit()
-
-def get_ad_stats(code):
-    with get_conn() as conn:
-        # Всего юзеров по метке
-        total = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ?", (code,)).fetchone()[0]
-        # За сегодня
-        today = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ? AND date(reg_date) = date('now')", (code,)).fetchone()[0]
-        # Выполнено заданий (всего) этими юзерами
-        tasks = conn.execute("""
-            SELECT COUNT(*) FROM tasks t 
-            JOIN users u ON t.user_id = u.user_id 
-            WHERE u.ad_code = ? AND t.status = 'done'
-        """, (code,)).fetchone()[0]
-        # Заданий за сегодня
-        tasks_today = conn.execute("""
-            SELECT COUNT(*) FROM tasks t 
-            JOIN users u ON t.user_id = u.user_id 
-            WHERE u.ad_code = ? AND t.status = 'done' AND date(t.added_at) = date('now')
-        """, (code,)).fetchone()[0]
-        
-        return {"total": total, "today": today, "tasks": tasks, "tasks_today": tasks_today}
-
-# === БЭКАП (ЗАГЛУШКА) ===
 def get_db_path():
     return DB

@@ -208,3 +208,18 @@ def get_user_withdraws(user_id):
 
 def get_db_path():
     return DB
+    
+# === СПОНСОРЫ (ОП) ===
+def get_sponsors():
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM sponsors").fetchall()
+
+def add_sponsor(name, link, channel_id):
+    with get_conn() as conn:
+        conn.execute("INSERT INTO sponsors (channel_name, channel_link, channel_id) VALUES (?, ?, ?)", (name, link, channel_id))
+        conn.commit()
+
+def delete_sponsor(sponsor_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM sponsors WHERE id = ?", (sponsor_id,))
+        conn.commit()

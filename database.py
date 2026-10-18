@@ -60,7 +60,6 @@ def init_db():
                 value TEXT
             )
         """)
-        # Таблица промокодов (чеков)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS promo_codes (
                 code TEXT PRIMARY KEY,
@@ -72,7 +71,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Таблица активаций (чтобы один юзер не активировал дважды)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS promo_activations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +81,6 @@ def init_db():
             )
         """)
         
-        # Дефолтные настройки
         defaults = [
             ("task_reward", "0.45"),
             ("ref_bonus", "11.0"),
@@ -119,6 +116,16 @@ def add_balance(user_id, amount, action_type="task"):
 def remove_balance(user_id, amount):
     with get_conn() as conn:
         conn.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
+        conn.commit()
+
+def add_ref(user_id):
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET total_refs = total_refs + 1 WHERE user_id = ?", (user_id,))
+        conn.commit()
+
+def confirm_ref(user_id, bonus, tasks_done_by_ref):
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET confirmed_refs = confirmed_refs + 1, balance = balance + ?, total_earned = total_earned + ?, ref_bonus_paid = 1 WHERE user_id = ?", (bonus, bonus, user_id))
         conn.commit()
 
 # === ЗАДАНИЯ ===
@@ -177,6 +184,38 @@ def activate_promo(code, user_id, amount):
         conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?", (amount, amount, user_id))
         conn.commit()
 
+# === ВЫВОД ===
+def create_withdraw(user_id, amount):
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO withdrawals (user_id, amount) VALUES (?, ?)", (user_id, amount))
+        conn.commit()
+        return cur.lastrowid
+
+def get_withdraw(withdraw_id):
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM withdrawals WHERE id = ?", (withdraw_id,)).fetchone()
+
+def update_withdraw_status(withdraw_id, status):
+    with get_conn() as conn:
+        conn.execute("UPDATE withdrawals SET status = ? WHERE id = ?", (status, withdraw_id))
+        conn.commit()
+
+# === СПОНСОРЫ (ОП) ===
+def get_sponsors():
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM sponsors").fetchall()
+
+def add_sponsor(name, link, channel_id):
+    with get_conn() as conn:
+        conn.execute("INSERT INTO sponsors (channel_name, channel_link, channel_id) VALUES (?, ?, ?)", (name, link, channel_id))
+        conn.commit()
+
+def delete_sponsor(sponsor_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM sponsors WHERE id = ?", (sponsor_id,))
+        conn.commit()
+
 # === СТАТИСТИКА ===
 def get_total_users():
     with get_conn() as conn:
@@ -208,18 +247,3 @@ def get_user_withdraws(user_id):
 
 def get_db_path():
     return DB
-    
-# === СПОНСОРЫ (ОП) ===
-def get_sponsors():
-    with get_conn() as conn:
-        return conn.execute("SELECT * FROM sponsors").fetchall()
-
-def add_sponsor(name, link, channel_id):
-    with get_conn() as conn:
-        conn.execute("INSERT INTO sponsors (channel_name, channel_link, channel_id) VALUES (?, ?, ?)", (name, link, channel_id))
-        conn.commit()
-
-def delete_sponsor(sponsor_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM sponsors WHERE id = ?", (sponsor_id,))
-        conn.commit()

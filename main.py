@@ -5,7 +5,7 @@ import aiohttp
 import datetime
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.enums import ParseMode
@@ -25,17 +25,21 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-# Состояние для ввода суммы вывода
+# Состояния для ввода данных
 class WithdrawState(StatesGroup):
     waiting_amount = State()
+
+class AdminStates(StatesGroup):
+    waiting_sponsor_name = State()
+    waiting_sponsor_link = State()
+    waiting_sponsor_id = State()
+    waiting_give_stars = State()
 
 # ==========================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ==========================================
-def _smart_text(msg: Message):
-    return msg.html_text if msg.entities else msg.text
-
 def format_amount(amount):
+    # Убираем .00 у целых чисел, чтобы было красиво (11 вместо 11.0)
     return f"{amount:.2f}".rstrip('0').rstrip('.') if amount % 1 else f"{amount:.0f}"
 
 # ==========================================
@@ -87,7 +91,6 @@ async def get_task_from_trafsly(user_id):
     return None
 
 async def fetch_new_task(user_id):
-    # Пробуем получить задание по очереди из 3 сервисов
     task = await get_task_from_piarflow(user_id)
     if not task: task = await get_task_from_tgrass(user_id)
     if not task: task = await get_task_from_trafsly(user_id)
@@ -103,7 +106,6 @@ async def check_task_status(service, user_id, task_id):
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get("sponsors", [{}])[0].get("status") in ["subscribed", "not_counted"]
-    
     elif service == "tgrass":
         url = "https://tgrass.space/check"
         headers = {"Auth": TGRASS_API_KEY}
@@ -113,7 +115,6 @@ async def check_task_status(service, user_id, task_id):
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get("status") == "subscribed"
-                    
     elif service == "trafsly":
         url = "https://api.trafsly.com/api/v1/confirm-subscription"
         headers = {"Auth": TRAFSLY_API_KEY}
@@ -126,6 +127,97 @@ async def check_task_status(service, user_id, task_id):
     return False
 
 # ==========================================
+# АДМИН ПАНЕЛЬ
+# ==========================================
+@router.message(Command("admin"))
+async def cmd_admin(message: Message, state: FSMContext):
+    await state.clear()
+    if message.from_user.id not in ADMIN_IDS: return
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🎁 Спонсоры (ОП)", callback_data="admin_sponsors"))
+    builder.row(InlineKeyboardButton(text="💰 Заявки на вывод", callback_data="admin_withdraws"))
+    builder.row(InlineKeyboardButton(text="⭐ Начислить звезды", callback_data="admin_give_stars"))
+    
+    await message.answer("👨‍💻 <b>Админ-панель</b>\nВыбери раздел:", reply_markup=builder.as_markup())
+
+@router.callback_query(F.data == "admin_sponsors")
+async def admin_sponsors(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS: return
+    sponsors = db.get_sponsors()
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="➕ Добавить канал", callback_data="admin_add_sponsor"))
+    for sp in sponsors:
+        builder.row(InlineKeyboardButton(text=f"❌ Удалить {sp['channel_name']}", callback_data=f"admin_del_sp_{sp['id']}"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
+    
+    text = "🎁 <b>Спонсоры (Обязательная подписка)</b>\n\n"
+    if not sponsors:
+        text += "Список пуст. Добавь первый канал."
+    else:
+        for sp in sponsors:
+            text += f"├ {sp['channel_name']} ({sp['channel_id']})\n"
+            
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+@router.callback_query(F.data == "admin_add_sponsor")
+async def admin_add_sponsor(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS: return
+    await callback.message.edit_text("Введи <b>название</b> канала (например, CowsGift):")
+    await state.set_state(AdminStates.waiting_sponsor_name)
+
+@router.message(AdminStates.waiting_sponsor_name)
+async def process_sponsor_name(message: Message, state: FSMContext):
+    await state.update_data(sp_name=message.text)
+    await message.answer("Введи <b>ссылку</b> на канал (например, https://t.me/cowsgift):")
+    await state.set_state(AdminStates.waiting_sponsor_link)
+
+@router.message(AdminStates.waiting_sponsor_link)
+async def process_sponsor_link(message: Message, state: FSMContext):
+    await state.update_data(sp_link=message.text)
+    await message.answer("Введи <b>ID канала</b> (например, -100123456789, можно узнать через @username_to_id_bot):")
+    await state.set_state(AdminStates.waiting_sponsor_id)
+
+@router.message(AdminStates.waiting_sponsor_id)
+async def process_sponsor_id(message: Message, state: FSMContext):
+    data = await state.get_data()
+    db.add_sponsor(data['sp_name'], data['sp_link'], message.text)
+    await message.answer("✅ Канал успешно добавлен!", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="К спонсорам", callback_data="admin_sponsors")]]))
+    await state.clear()
+
+@router.callback_query(F.data.startswith("admin_del_sp_"))
+async def admin_del_sponsor(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS: return
+    sp_id = int(callback.data.split("_")[3])
+    db.delete_sponsor(sp_id)
+    await callback.answer("Канал удален", show_alert=True)
+    await admin_sponsors(callback)
+
+@router.callback_query(F.data == "admin_give_stars")
+async def admin_give_stars(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS: return
+    await callback.message.edit_text("Введи <b>ID юзера</b> и <b>сумму</b> через пробел (например: 123456789 50):")
+    await state.set_state(AdminStates.waiting_give_stars)
+
+@router.message(AdminStates.waiting_give_stars)
+async def process_give_stars(message: Message, state: FSMContext):
+    try:
+        uid, amount = map(float, message.text.split())
+        db.add_balance(int(uid), amount, "admin_give")
+        await message.answer(f"✅ Начислено {format_amount(amount)} ⭐ пользователю {int(uid)}")
+        try:
+            await bot.send_message(int(uid), f"🎁 Администратор начислил вам {format_amount(amount)} ⭐")
+        except: pass
+    except:
+        await message.answer("Ошибка. Введи ID и сумму через пробел.")
+    await state.clear()
+
+@router.callback_query(F.data == "admin_back")
+async def admin_back(callback: CallbackQuery):
+    await cmd_admin(callback.message, None)
+
+# ==========================================
 # ХЕНДЛЕРЫ СТАРТА И ОП
 # ==========================================
 @router.message(CommandStart())
@@ -134,7 +226,6 @@ async def cmd_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
     user = db.get_user(user_id)
     
-    # Регистрация
     if not user:
         ref_id = None
         args = message.text.split()
@@ -147,15 +238,14 @@ async def cmd_start(message: Message, state: FSMContext):
             db.add_ref(ref_id)
             try:
                 ref_name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
-                await bot.send_message(ref_id, f'<tg-emoji emoji-id="5456140674028019486">⚡️</tg-emoji> <b>{ref_name}</b> присоединился по твоей ссылке!\n\nТы получишь <b>{REF_BONUS}</b> ⭐, как только он выполнит <b>{REF_TASKS_REQUIRED}</b> заданий')
+                await bot.send_message(ref_id, f'<tg-emoji emoji-id="5456140674028019486">⚡️</tg-emoji> <b>{ref_name}</b> присоединился по твоей ссылке!\n\nТы получишь <b>{format_amount(REF_BONUS)}</b> ⭐, как только он выполнит <b>{REF_TASKS_REQUIRED}</b> заданий')
             except: pass
     else:
         db.update_user_username(user_id, message.from_user.username, message.from_user.first_name)
 
-    # Проверка ОП (Личные спонсоры)
     sponsors = db.get_sponsors()
     if sponsors:
-        sp = sponsors[0] # Берем первого для примера
+        sp = sponsors[0]
         await message.answer(
             DEFAULTS["sub_text"].format(channel_name=sp['channel_name']),
             reply_markup=kb.sub_check_kb(sp['channel_link'])
@@ -165,15 +255,11 @@ async def cmd_start(message: Message, state: FSMContext):
     await send_main_menu(message)
 
 async def send_main_menu(message: Message):
-    user = db.get_user(message.from_user.id)
-    text = DEFAULTS["menu_text"].format(ref_bonus=REF_BONUS)
-    # (Здесь должен быть file_id картинки, если нужно)
+    text = DEFAULTS["menu_text"].format(ref_bonus=format_amount(REF_BONUS))
     await message.answer(text, reply_markup=kb.main_menu_kb())
 
 @router.callback_query(F.data == "check_sub")
 async def process_sub_check(callback: CallbackQuery):
-    # В реальности здесь нужно проверять подписку через bot.get_chat_member
-    # Для простоты пропускаем (или проверяем, что юзер нажал)
     await callback.message.delete()
     await send_main_menu(callback.message)
     await callback.answer()
@@ -198,7 +284,6 @@ async def show_refs(callback: CallbackQuery):
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
     
-    # Формируем список рефералов
     with db.get_conn() as conn:
         refs = conn.execute("SELECT * FROM users WHERE referrer_id = ?", (user_id,)).fetchall()
     
@@ -213,7 +298,7 @@ async def show_refs(callback: CallbackQuery):
     if not ref_list_text: ref_list_text = "├ Пока никого нет\n"
     
     text = DEFAULTS["ref_text"].format(
-        ref_bonus=REF_BONUS,
+        ref_bonus=format_amount(REF_BONUS),
         ref_tasks_required=REF_TASKS_REQUIRED,
         ref_link=ref_link,
         total_refs=user['total_refs'],
@@ -221,7 +306,7 @@ async def show_refs(callback: CallbackQuery):
         ref_list=ref_list_text,
         balance=format_amount(user['balance'])
     )
-    await callback.message.edit_text(text, reply_markup=kb.back_kb("menu_back"))
+    await callback.message.edit_text(text, reply_markup=kb.back_kb())
 
 # ==========================================
 # ПРОФИЛЬ
@@ -238,7 +323,7 @@ async def show_profile(callback: CallbackQuery):
         user_id=user['user_id'],
         tasks_completed=user['tasks_completed']
     )
-    await callback.message.edit_text(text, reply_markup=kb.back_kb("menu_back"))
+    await callback.message.edit_text(text, reply_markup=kb.back_kb())
 
 # ==========================================
 # ВЫВОД
@@ -276,24 +361,20 @@ async def process_withdraw_text(message: Message, state: FSMContext):
 async def process_withdraw_request(message: Message, user_id: int, amount: float):
     user = db.get_user(user_id)
     
-    # Проверка баланса
     if user['balance'] < amount:
         await message.answer(f"Не хватает звёзд. Баланс: {format_amount(user['balance'])} ⭐")
         return
         
-    # Проверка друзей
     if user['confirmed_refs'] < WITHDRAW_FRIENDS_REQUIRED:
         need = WITHDRAW_FRIENDS_REQUIRED - user['confirmed_refs']
         await message.answer(f"⚠️ <b>Недостаточно друзей для вывода!</b>\n\nДля вывода нужно пригласить еще <b>{need}</b> друзей.\nСейчас у вас: <b>{user['confirmed_refs']}</b> из <b>{WITHDRAW_FRIENDS_REQUIRED}</b>.")
         return
         
-    # Создаем заявку
     wd_id = db.create_withdraw(user_id, amount)
     db.remove_balance(user_id, amount)
     
     await message.answer(f"✅ Заявка <b>#{wd_id}</b> на <b>{format_amount(amount)}</b> ⭐ создана.\nСрок вывода: 5 минут — 24 часа.", reply_markup=kb.back_kb())
     
-    # Уведомление админу
     for admin in ADMIN_IDS:
         try:
             await bot.send_message(admin, f"💰 Новая заявка #{wd_id} от @{user['username']} на {format_amount(amount)} ⭐")
@@ -304,7 +385,7 @@ async def process_withdraw_request(message: Message, user_id: int, amount: float
 # ==========================================
 @router.callback_query(F.data == "menu_instruction")
 async def show_instruction(callback: CallbackQuery):
-    await callback.message.edit_text(DEFAULTS["instruction_text"], reply_markup=kb.back_kb("menu_back"))
+    await callback.message.edit_text(DEFAULTS["instruction_text"], reply_markup=kb.back_kb())
 
 @router.callback_query(F.data == "menu_stats")
 async def show_stats(callback: CallbackQuery):
@@ -317,7 +398,6 @@ async def show_stats(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("top_"))
 async def show_top(callback: CallbackQuery):
     top_type = callback.data.split("_")[1]
-    # Заглушка для топов, чтобы не падало
     await callback.message.edit_text("Топ в разработке...", reply_markup=kb.back_kb("menu_stats"))
 
 # ==========================================
@@ -330,10 +410,8 @@ async def show_tasks(callback: CallbackQuery):
     await callback.answer()
 
 async def send_next_task(message: Message, user_id: int):
-    # Ищем задание в БД
     task = db.get_pending_task(user_id)
     
-    # Если нет — просим у API
     if not task:
         new_task = await fetch_new_task(user_id)
         if not new_task:
@@ -358,7 +436,6 @@ async def check_task(callback: CallbackQuery):
     is_done = await check_task_status(task['service'], user_id, task['task_id'])
     
     if is_done:
-        # Начисляем
         db.add_balance(user_id, TASK_REWARD, "task")
         db.mark_task_completed(user_id)
         db.mark_task_status(task['id'], 'done')
@@ -367,11 +444,9 @@ async def check_task(callback: CallbackQuery):
         await asyncio.sleep(1.5)
         await send_next_task(callback.message, user_id)
         
-        # Логика реферала (если этот юзер реферал, проверяем, не пора ли начислить бонус)
         user = db.get_user(user_id)
         if user['referrer_id'] and not user['ref_bonus_paid']:
             if user['tasks_completed'] >= REF_TASKS_REQUIRED:
-                # Начисляем бонус рефереру
                 db.confirm_ref(user['referrer_id'], REF_BONUS, user['tasks_completed'])
                 try:
                     await bot.send_message(user['referrer_id'], f'<tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji> Твой реферал <b>@{user["username"]}</b> выполнил <b>{REF_TASKS_REQUIRED}</b> заданий: <b>+{format_amount(REF_BONUS)} ⭐</b>')

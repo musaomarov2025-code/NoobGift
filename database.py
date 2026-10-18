@@ -1,7 +1,7 @@
 import sqlite3
 import random
 from datetime import datetime, timedelta, date
-from config import DB, DEFAULTS, REFERRAL_DAYS, JOIN_REQUEST_HOURS
+from config import DB, DEFAULTS, REFERRAL_DAYS
 
 def get_conn():
     conn = sqlite3.connect(DB, check_same_thread=False)

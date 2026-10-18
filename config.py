@@ -1,39 +1,54 @@
-# config.py
+import os
 
 # ==========================================
 # ОСНОВНЫЕ НАСТРОЙКИ
 # ==========================================
-BOT_TOKEN = "8944743132:AAE5QUA4qMduCTmQM2FgLYJmBBlTsmaNcXg"
-ADMIN_IDS = [8742164697]  # ID Савика
-
-# ВАЖНО: отдельная база данных для клона
-DB = "/app/data/cows.db" 
+BOT_TOKEN = "8944743132:AAE5QUA4qMduCTmQM2FgLYJmBBlTsmaNcXg" # Токен от @MilingCows_bot
+ADMIN_ID = 8742164697
+DB = "/app/data/cows.db" # Отдельная база для нового бота
 
 # ==========================================
-# API КЛЮЧИ ДЛЯ СЕРВИСОВ ЗАДАНИЙ
+# СЕРВИСЫ И КЛЮЧИ
 # ==========================================
-PIARFLOW_API_KEY = "XDTTx_U9OEaSruxOOA4C1l1I8rPIKHQ1"
-TGRASS_API_KEY = "5237b312a8ea4d6a8f34ebcb8f3fb4c9"
-TRAFSLY_API_KEY = "at_a16dc68b3b6506a4c9486a4c7bbcbc1c"
+# ОП (Обязательная подписка)
+BOTOHUB_TOKEN = "1196d848-7318-4c55-a643-bc0d2e709525"
+BOTOHUB_URL = "https://botohub.me/get-tasks-extended"
+
+# Задания (PiarFlow, Tgrass, Trafsly)
+PIARFLOW_TOKEN = "XDTTx_U9OEaSruxOOA4C1l1I8rPIKHQ1"
+PIARFLOW_URL = "https://piarflow.com/v1"
+
+TGRASS_TOKEN = "5237b312a8ea4d6a8f34ebcb8f3fb4c9"
+TGRASS_URL = "https://tgrass.space/tasks"
+
+TRAFSLY_TOKEN = "at_a16dc68b3b6506a4c9486a4c7bbcbc1c"
+TRAFSLY_URL = "https://api.trafsly.com/api/v1/get-sponsors"
 
 # ==========================================
-# НАСТРОЙКИ ЭКОНОМИКИ И ЗАДАНИЙ
+# НАСТРОЙКИ ЭКОНОМИКИ
 # ==========================================
-TASK_REWARD = 0.45              # Сколько звезд за 1 задание
-TASKS_PER_PAGE = 1              # Выдаем по одному заданию
-REF_BONUS = 11.0                # Бонус за приглашенного друга
-REF_TASKS_REQUIRED = 5          # Сколько заданий должен выполнить друг
-WITHDRAW_FRIENDS_REQUIRED = 3   # Сколько друзей нужно для вывода
-WITHDRAW_AMOUNTS = [15, 25, 50, 100] # Доступные суммы для вывода
-
-# Оставляем старые настройки, которые уже были
-DAILY_BONUS = 1.0               # Ежедневный бонус
-WELCOME_BONUS = 15.0            # Бонус за вход
+WITHDRAW_AMOUNTS = [15, 25, 50, 100]
+REFERRAL_DAYS = 7
 
 # ==========================================
 # ТЕКСТЫ И ПРЕМ-ЭМОДЗИ (DEFAULTS)
 # ==========================================
 DEFAULTS = {
+    # --- Настройки ---
+    "ref_bonus": "11",
+    "daily_bonus": "1",
+    "welcome_bonus": "15",
+    "withdraw_friends_required": "3",
+    "task_reward": "0.45",
+    "welcome_text": "Главное меню 👇",
+    
+    # Вкл/Выкл сервисов (1 - вкл, 0 - выкл)
+    "botohub_enabled": "1",
+    "piarflow_enabled": "1",
+    "tgrass_enabled": "1",
+    "trafsly_enabled": "1",
+
+    # --- Тексты ---
     "menu_text": (
         '<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> Получи свою личную ссылку — жми «Рефералы»\n\n'
         '<tg-emoji emoji-id="5280605017043118832">👥</tg-emoji> Приглашай друзей — {ref_bonus} <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji> за каждого приглашённого друга!'
@@ -42,7 +57,7 @@ DEFAULTS = {
         '<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> <b>Зарабатывай звёзды, приглашая друзей по своей реферальной ссылке</b>\n\n'
         '├ За приглашённого друга — <b>{ref_bonus} <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji></b>\n'
         '├ Друг должен перейти по твоей ссылке\n'
-        '└ И выполнить <b>{ref_tasks_required}</b> заданий от спонсоров\n\n'
+        '└ И пройти обязательную подписку (ОП)\n\n'
         '<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> <b>Твоя ссылка:</b>\n'
         '{ref_link}\n\n'
         '<tg-emoji emoji-id="5280605017043118832">👥</tg-emoji> Всего приглашено: <b>{total_refs}</b>\n'
@@ -50,7 +65,7 @@ DEFAULTS = {
         '<tg-emoji emoji-id="5280605017043118832">👥</tg-emoji> <b>Кто пришёл по твоей ссылке:</b>\n'
         '{ref_list}\n\n'
         '<tg-emoji emoji-id="5417924076503062111">💰</tg-emoji> Баланс: <b>{balance}</b> <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji>\n\n'
-        '<tg-emoji emoji-id="5447644880824181073">⚠️</tg-emoji> <i>Награда начисляется только после успешной проверки выполненных заданий.</i>'
+        '<tg-emoji emoji-id="5447644880824181073">⚠️</tg-emoji> <i>Награда начисляется только после прохождения ОП.</i>'
     ),
     "profile_text": (
         '<tg-emoji emoji-id="5936017305585586269">🪪</tg-emoji> <b>Профиль</b>\n\n'
@@ -90,5 +105,10 @@ DEFAULTS = {
         '<tg-emoji emoji-id="5447644880824181073">⚠️</tg-emoji> <b>Подпишись, чтобы продолжить</b>\n\n'
         '├ {channel_name}\n\n'
         'Потом жми «Проверить» <tg-emoji emoji-id="5411197345968701560">✅</tg-emoji>'
-    )
+    ),
+
+    # --- Приватка ---
+    "priv_enabled": "0",
+    "priv_text": "",
+    "priv_buttons": ""
 }

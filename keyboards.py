@@ -51,50 +51,46 @@ def back_kb(target="menu_back"):
     return builder.as_markup()
 
 # ==========================================
-# ЗАДАНИЯ (ОП на входе и Сами задания)
+# ЗАДАНИЯ И ОП
 # ==========================================
-def sub_check_kb(channel_link):
+def sub_check_kb(channel_link, channel_name): # <--- ИСПРАВЛЕНО ЗДЕСЬ
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
-        text='Подписаться', 
+        text=f'Перейти в {channel_name}', 
         url=channel_link,
-        icon_custom_emoji_id="6311812139233316820"
+        icon_custom_emoji_id="5472033358693280429", # Собачка
+        style="primary" # Синяя
     ))
     builder.row(InlineKeyboardButton(
         text='Проверить', 
         callback_data="check_sub",
-        icon_custom_emoji_id="5411197345968701560",
+        icon_custom_emoji_id="5411197345968701560", # Галочка
         style="success" # Зеленая
     ))
     return builder.as_markup()
 
 def task_kb(task_url):
     builder = InlineKeyboardBuilder()
-    
-    # Кнопка перехода (синяя, так как ссылка)
     builder.row(InlineKeyboardButton(
         text='Сделать задание', 
         url=task_url,
-        icon_custom_emoji_id="5472033358693280429" # Собачка
+        icon_custom_emoji_id="5472033358693280429", # Собачка
+        style="primary" # Синяя
     ))
-    
-    # Кнопки Проверить / Пропустить (цветные)
     builder.row(
         InlineKeyboardButton(
             text='Проверить', 
             callback_data="check_task", 
-            icon_custom_emoji_id="5251503375207392582", # Галочка
-            style="success" # Зеленая
+            icon_custom_emoji_id="5251503375207392582",
+            style="success"
         ),
         InlineKeyboardButton(
             text='Пропустить', 
             callback_data="skip_task",
-            icon_custom_emoji_id="6311812139233316820", # Тот ID, что ты дал
-            style="danger" # Красная
+            icon_custom_emoji_id="6311812139233316820",
+            style="danger"
         )
     )
-    
-    # Кнопка Назад
     builder.row(InlineKeyboardButton(
         text='Назад', 
         callback_data="menu_back",
@@ -168,4 +164,12 @@ def top_period_kb(top_type, current_period="all"):
         callback_data="menu_stats",
         icon_custom_emoji_id="5346230992044574063"
     ))
+    return builder.as_markup()
+
+# ==========================================
+# АДМИН ПАНЕЛЬ (Кнопки, если понадобятся)
+# ==========================================
+def admin_back_kb():
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
     return builder.as_markup()

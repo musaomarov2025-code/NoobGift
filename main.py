@@ -1,39 +1,41 @@
-# main.py
 import asyncio
-import logging
-import aiohttp
+import json
 import os
 import random
-import string
-from aiogram import Bot, Dispatcher, F, Router
+from datetime import datetime, timedelta
+from urllib.parse import quote
+
+import aiohttp
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import (
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    FSInputFile,
+)
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 from config import (
-    BOT_TOKEN, ADMIN_IDS, DEFAULTS, PIARFLOW_API_KEY, TGRASS_API_KEY, 
-    TRAFSLY_API_KEY, TASK_REWARD, REF_BONUS, REF_TASKS_REQUIRED, 
-    WITHDRAW_FRIENDS_REQUIRED, WITHDRAW_AMOUNTS
+    BOT_TOKEN, ADMIN_ID, DB, WITHDRAW_AMOUNTS,
+    BOTOHUB_TOKEN, BOTOHUB_URL,
+    PIARFLOW_TOKEN, PIARFLOW_URL,
+    TGRASS_TOKEN, TGRASS_URL,
+    TRAFSLY_TOKEN, TRAFSLY_URL,
+    DEFAULTS
 )
 import database as db
 import keyboards as kb
 
-logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
-router = Router()
-dp.include_router(router)
 
-# ==========================================
-# СОСТОЯНИЯ (FSM)
-# ==========================================
+# ================== FSM ==================
 class WithdrawState(StatesGroup):
     waiting_amount = State()
-
+    
 class AdminStates(StatesGroup):
     waiting_sponsor_name = State()
     waiting_sponsor_link = State()
@@ -46,51 +48,104 @@ class AdminStates(StatesGroup):
     waiting_setting_value = State()
     waiting_user_info = State()
 
+# ================== ХЕЛПЕР ==================
+def _smart_text(message):
+    return message.html_text if message.entities else message.text
+
 def format_amount(amount):
     return f"{amount:.2f}".rstrip('0').rstrip('.') if amount % 1 else f"{amount:.0f}"
 
-# ==========================================
-# API СЕРВИСОВ (ЗАГЛУШКИ ДЛЯ ПРИМЕРА)
-# ==========================================
-async def get_task_from_piarflow(user_id):
-    url = "https://piarflow.com/v1/sponsors"
-    headers = {"Authorization": f"Bearer {PIARFLOW_API_KEY}"}
+async def send_with_avatar(message: Message, text: str, reply_markup=None):
+    # В твоем старом коде ава хранилась в priv, но мы можем использовать menu_avatar
+    avatar = db.get_setting("menu_avatar")
+    if avatar:
+        await message.answer_photo(photo=avatar, caption=text, reply_markup=reply_markup)
+    else:
+        await message.answer(text=text, reply_markup=reply_markup)
+
+# ================== BOTOHUB (ОП) ==================
+def bh_enabled():
+    return db.get_setting("botohub_enabled") == "1"
+
+async def bh_get_tasks(chat_id, count):
+    if not BOTOHUB_TOKEN: return {"tasks": [], "completed": True, "skip": True}
+    payload = {"chat_id": chat_id, "max_op": count}
+    headers = {"Auth": BOTOHUB_TOKEN, "Content-Type": "application/json"}
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(BOTOHUB_URL, json=payload, headers=headers, timeout=15) as r:
+                return await r.json()
+    except Exception as e:
+        print("Botohub ОП error:", e)
+        return {"tasks": [], "completed": True, "skip": True}
+
+async def collect_op_items(user_id):
+    if not bh_enabled(): return []
+    try:
+        count = int(db.get_setting("botohub_entry_count") or 2)
+    except: count = 2
+    data = await bh_get_tasks(user_id, count)
+    tasks = data.get("tasks", [])
+    return [(t.get('url'), "Подписаться", t.get('url'), False) for t in tasks if not t.get("completed") and t.get("url")]
+
+async def check_op_and_proceed(call_or_message, user_id):
+    items = await collect_op_items(user_id)
+    if not items:
+        db.set_op_passed(user_id)
+        ref_id = db.confirm_referral(user_id)
+        if ref_id:
+            ref_bonus = int(db.get_setting("ref_bonus"))
+            db.add_balance(ref_id, ref_bonus)
+            try:
+                await bot.send_message(ref_id, f'<tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji> Твой реферал прошел ОП: <b>+{ref_bonus} ⭐</b>')
+            except: pass
+        return True
+    else:
+        text = db.get_setting("sub_text").format(channel_name="Спонсоры")
+        kb = kb.op_screen_kb(items)
+        if isinstance(call_or_message, CallbackQuery):
+            await call_or_message.message.edit_text(text, reply_markup=kb)
+        else:
+            await call_or_message.answer(text, reply_markup=kb)
+        return False
+
+# ================== API СЕРВИСОВ ЗАДАНИЙ ==================
+async def fetch_task_piarflow(user_id):
+    headers = {"Authorization": f"Bearer {PIARFLOW_TOKEN}"}
     payload = {"user_id": user_id, "chat_id": user_id, "max_sponsors": 1}
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as s:
         try:
-            async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
+            async with s.post(f"{PIARFLOW_URL}/sponsors", json=payload, headers=headers, timeout=10) as r:
+                if r.status == 200:
+                    data = await r.json()
                     sponsors = data.get("sponsors", [])
                     if sponsors:
                         return {"service": "piarflow", "task_id": sponsors[0]["link"], "link": sponsors[0]["link"]}
         except: pass
     return None
 
-async def get_task_from_tgrass(user_id):
-    url = "https://tgrass.space/tasks"
-    headers = {"Auth": TGRASS_API_KEY}
+async def fetch_task_tgrass(user_id):
+    headers = {"Auth": TGRASS_TOKEN}
     payload = {"tg_user_id": user_id, "is_premium": False, "lang": "ru"}
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as s:
         try:
-            async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
+            async with s.post(TGRASS_URL, json=payload, headers=headers, timeout=10) as r:
+                if r.status == 200:
+                    data = await r.json()
                     offers = data.get("offers", [])
                     if offers and data.get("status") == "not_ok":
                         return {"service": "tgrass", "task_id": str(offers[0]["offer_id"]), "link": offers[0]["link"]}
         except: pass
     return None
 
-async def get_task_from_trafsly(user_id):
-    url = "https://api.trafsly.com/api/v1/get-sponsors"
-    headers = {"Auth": TRAFSLY_API_KEY}
+async def fetch_task_trafsly(user_id):
+    headers = {"Auth": TRAFSLY_TOKEN}
     payload = {"user_id": user_id}
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as s:
         try:
-            async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
+            async with s.post(TRAFSLY_URL, json=payload, headers=headers, timeout=10) as r:
+                if r.status == 200:
+                    data = await r.json()
                     sponsors = data.get("sponsors", [])
                     if sponsors and data.get("status") == "warning":
                         return {"service": "trafsly", "task_id": str(sponsors[0]["ads_id"]), "link": sponsors[0]["link"]}
@@ -98,451 +153,139 @@ async def get_task_from_trafsly(user_id):
     return None
 
 async def fetch_new_task(user_id):
-    task = await get_task_from_piarflow(user_id)
-    if not task: task = await get_task_from_tgrass(user_id)
-    if not task: task = await get_task_from_trafsly(user_id)
-    return task
+    t = await fetch_task_piarflow(user_id)
+    if not t: t = await fetch_task_tgrass(user_id)
+    if not t: t = await fetch_task_trafsly(user_id)
+    return t
 
 async def check_task_status(service, user_id, task_id):
     if service == "piarflow":
-        url = "https://piarflow.com/v1/sponsors/check"
-        headers = {"Authorization": f"Bearer {PIARFLOW_API_KEY}"}
+        headers = {"Authorization": f"Bearer {PIARFLOW_TOKEN}"}
         payload = {"user_id": user_id, "links": [task_id]}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{PIARFLOW_URL}/sponsors/check", json=payload, headers=headers) as r:
+                if r.status == 200:
+                    data = await r.json()
                     return data.get("sponsors", [{}])[0].get("status") in ["subscribed", "not_counted"]
     elif service == "tgrass":
-        url = "https://tgrass.space/check"
-        headers = {"Auth": TGRASS_API_KEY}
+        headers = {"Auth": TGRASS_TOKEN}
         payload = {"tg_user_id": user_id, "offer_id": int(task_id)}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
+        async with aiohttp.ClientSession() as s:
+            async with s.post("https://tgrass.space/check", json=payload, headers=headers) as r:
+                if r.status == 200:
+                    data = await r.json()
                     return data.get("status") == "subscribed"
     elif service == "trafsly":
-        url = "https://api.trafsly.com/api/v1/confirm-subscription"
-        headers = {"Auth": TRAFSLY_API_KEY}
+        headers = {"Auth": TRAFSLY_TOKEN}
         payload = {"user_id": user_id, "ads_id": task_id}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
+        async with aiohttp.ClientSession() as s:
+            async with s.post("https://api.trafsly.com/api/v1/confirm-subscription", json=payload, headers=headers) as r:
+                if r.status == 200:
+                    data = await r.json()
                     return data.get("subscribed") is True
     return False
 
-# ==========================================
-# АДМИН ПАНЕЛЬ
-# ==========================================
-@router.message(Command("admin"))
-async def cmd_admin(message: Message, state: FSMContext):
-    await state.clear()
-    if message.from_user.id not in ADMIN_IDS: return
-    
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats_main"))
-    builder.row(
-        InlineKeyboardButton(text="🎁 Спонсоры (ОП)", callback_data="admin_sponsors"),
-        InlineKeyboardButton(text="💰 Заявки на вывод", callback_data="admin_withdraws")
-    )
-    builder.row(
-        InlineKeyboardButton(text="🎫 Промокоды", callback_data="admin_promo"),
-        InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_settings")
-    )
-    builder.row(
-        InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast"),
-        InlineKeyboardButton(text="👤 Поиск юзера", callback_data="admin_find_user")
-    )
-    builder.row(
-        InlineKeyboardButton(text="🖼 Сменить аву", callback_data="admin_change_avatar"),
-        InlineKeyboardButton(text="💾 Бэкап", callback_data="admin_backup")
-    )
-    
-    await message.answer("👨‍💻 <b>Админ-панель</b>\nВыбери раздел:", reply_markup=builder.as_markup())
-
-@router.callback_query(F.data == "admin_back")
-async def admin_back(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await cmd_admin(callback.message, state)
-    await callback.answer()
-
-# --- 1. СТАТИСТИКА БОТА ---
-@router.callback_query(F.data == "admin_stats_main")
-async def admin_stats(callback: CallbackQuery):
-    total_users = db.get_total_users()
-    new_today = db.get_new_users_today()
-    total_balance = db.get_total_balance()
-    total_withdrawn = db.get_total_withdrawn()
-    tasks_done = db.get_total_tasks_done()
-    
-    text = (
-        "📊 <b>Статистика бота</b>\n\n"
-        f"👥 Всего юзеров: <b>{total_users}</b>\n"
-        f"🆕 Новых за сегодня: <b>{new_today}</b>\n"
-        f"💰 Общий баланс: <b>{format_amount(total_balance)}</b> ⭐\n"
-        f"💸 Всего выведено: <b>{format_amount(total_withdrawn)}</b> ⭐\n"
-        f"✅ Заданий выполнено: <b>{tasks_done}</b>"
-    )
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]]))
-
-# --- 2. ПРОМОКОДЫ ---
-@router.callback_query(F.data == "admin_promo")
-async def admin_promo(callback: CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="➕ Создать чек", callback_data="admin_create_promo"))
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    await callback.message.edit_text("🎫 <b>Управление промокодами</b>\n\nЗдесь ты можешь создавать чеки на звезды.", reply_markup=builder.as_markup())
-
-@router.callback_query(F.data == "admin_create_promo")
-async def admin_create_promo(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Введи <b>сумму</b> (одно число) или <b>диапазон</b> через дефис (например, 4-50):")
-    await state.set_state(AdminStates.waiting_promo_sum)
-
-@router.message(AdminStates.waiting_promo_sum)
-async def process_promo_sum(message: Message, state: FSMContext):
-    try:
-        if "-" in message.text:
-            amin, amax = map(float, message.text.split("-"))
-        else:
-            amin = amax = float(message.text)
-        await state.update_data(amin=amin, amax=amax)
-        await message.answer("Сколько раз можно активировать чек?")
-        await state.set_state(AdminStates.waiting_promo_act)
-    except:
-        await message.answer("Ошибка. Введи число или диапазон (4-50).")
-
-@router.message(AdminStates.waiting_promo_act)
-async def process_promo_act(message: Message, state: FSMContext):
-    try:
-        max_act = int(message.text)
-        data = await state.get_data()
-        
-        # Генерируем код
-        code = "check_" + ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-        db.create_promo(code, data['amin'], data['amax'], max_act, False)
-        
-        bot_info = await bot.get_me()
-        link = f"https://t.me/{bot_info.username}?start={code}"
-        
-        await message.answer(f"✅ Чек создан!\nСсылка: {link}\nСумма: {data['amin']}-{data['amax']} ⭐\nАктиваций: {max_act}")
-        await state.clear()
-    except:
-        await message.answer("Ошибка. Введи число.")
-
-# --- 3. НАСТРОЙКИ ---
-@router.callback_query(F.data == "admin_settings")
-async def admin_settings(callback: CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="⭐ Награда за задание", callback_data="set_task_reward"))
-    builder.row(InlineKeyboardButton(text="👥 Бонус за реферала", callback_data="set_ref_bonus"))
-    builder.row(InlineKeyboardButton(text="🤝 Друзей для вывода", callback_data="set_withdraw_friends"))
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    await callback.message.edit_text("⚙️ <b>Настройки экономики</b>\nВыбери, что изменить:", reply_markup=builder.as_markup())
-
-@router.callback_query(F.data.startswith("set_"))
-async def setting_change(callback: CallbackQuery, state: FSMContext):
-    key = callback.data.split("_")[1] + "_" + callback.data.split("_")[2]
-    await state.update_data(set_key=key)
-    await callback.message.edit_text("Введи новое значение:")
-    await state.set_state(AdminStates.waiting_setting_value)
-
-@router.message(AdminStates.waiting_setting_value)
-async def process_setting_value(message: Message, state: FSMContext):
-    data = await state.get_data()
-    db.set_setting(data['set_key'], message.text)
-    await message.answer("✅ Настройка сохранена!")
-    await state.clear()
-
-# --- 4. ПОИСК ЮЗЕРА ---
-@router.callback_query(F.data == "admin_find_user")
-async def admin_find_user(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Введи ID юзера для просмотра информации:")
-    await state.set_state(AdminStates.waiting_user_info)
-
-@router.message(AdminStates.waiting_user_info)
-async def process_user_info(message: Message, state: FSMContext):
-    try:
-        uid = int(message.text)
-        u = db.get_user(uid)
-        if not u:
-            await message.answer("Юзер не найден.")
-            return
-            
-        refs = db.get_user_referrals(uid)
-        wds = db.get_user_withdraws(uid)
-        
-        text = (
-            f"👤 <b>Инфо о юзере</b> {uid}\n\n"
-            f"Ник: @{u['username']} ({u['first_name']})\n"
-            f"Баланс: {format_amount(u['balance'])} ⭐\n"
-            f"Всего заработано: {format_amount(u['total_earned'])} ⭐\n"
-            f"Заданий выполнено: {u['tasks_completed']}\n"
-            f"Друзей: {u['total_refs']} (подтверждено: {u['confirmed_refs']})\n"
-            f"Заявок на вывод: {len(wds)}\n"
-            f"Регистрация: {u['reg_date']}"
-        )
-        await message.answer(text)
-    except:
-        await message.answer("Ошибка ID.")
-    await state.clear()
-
-# --- 5. ВЫВОД С ПРОВЕРКОЙ ---
-@router.callback_query(F.data == "admin_withdraws")
-async def admin_withdraws(callback: CallbackQuery):
-    with db.get_conn() as conn:
-        wds = conn.execute("SELECT * FROM withdrawals WHERE status = 'pending'").fetchall()
-    if not wds:
-        await callback.message.edit_text("Заявок нет.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]]))
-        return
-    
-    wd = wds[0]
-    u = db.get_user(wd['user_id'])
-    
-    text = (
-        f"💰 <b>Заявка #{wd['id']}</b>\n\n"
-        f"Юзер: @{u['username']} (ID: {u['user_id']})\n"
-        f"Сумма: <b>{format_amount(wd['amount'])}</b> ⭐\n\n"
-        f"📊 <b>Проверка:</b>\n"
-        f"├ Друзей: {u['total_refs']} (подтверждено: {u['confirmed_refs']})\n"
-        f"├ Заданий сделал: {u['tasks_completed']}\n"
-        f"└ Дата заявки: {wd['created_at']}"
-    )
-    
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="✅ Выплачено", callback_data=f"admin_pay_{wd['id']}", style="success"),
-        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin_rej_{wd['id']}", style="danger")
-    )
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-
-@router.callback_query(F.data.startswith("admin_pay_"))
-async def admin_pay(callback: CallbackQuery):
-    wd_id = int(callback.data.split("_")[2])
-    db.update_withdraw_status(wd_id, 'paid')
-    wd = db.get_withdraw(wd_id)
-    try: await bot.send_message(wd['user_id'], f"✅ Заявка <b>#{wd_id}</b> на <b>{format_amount(wd['amount'])}</b> ⭐ выплачена!")
-    except: pass
-    await callback.answer("Выплачено!", show_alert=True)
-    await admin_withdraws(callback)
-
-@router.callback_query(F.data.startswith("admin_rej_"))
-async def admin_rej(callback: CallbackQuery):
-    wd_id = int(callback.data.split("_")[2])
-    db.update_withdraw_status(wd_id, 'rejected')
-    wd = db.get_withdraw(wd_id)
-    db.add_balance(wd['user_id'], wd['amount'], "refund")
-    await callback.answer("Отклонено, баланс возвращен.", show_alert=True)
-    await admin_withdraws(callback)
-
-# --- 6. ОСТАЛЬНОЕ (АВА, РАССЫЛКА, БЭКАП) ---
-@router.callback_query(F.data == "admin_change_avatar")
-async def admin_change_avatar(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Отправь мне фото для главного меню:")
-    await state.set_state(AdminStates.waiting_avatar)
-
-@router.message(AdminStates.waiting_avatar, F.photo)
-async def process_avatar(message: Message, state: FSMContext):
-    db.set_setting("menu_avatar", message.photo[-1].file_id)
-    await message.answer("✅ Ава обновлена!")
-    await state.clear()
-
-@router.callback_query(F.data == "admin_broadcast")
-async def admin_broadcast(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Отправь текст для рассылки:")
-    await state.set_state(AdminStates.waiting_broadcast)
-
-@router.message(AdminStates.waiting_broadcast)
-async def process_broadcast(message: Message, state: FSMContext):
-    with db.get_conn() as conn:
-        users = conn.execute("SELECT user_id FROM users").fetchall()
-    await message.answer(f"Начинаю рассылку для {len(users)}...")
-    success = 0
-    for u in users:
-        try:
-            await bot.send_message(u['user_id'], message.html_text)
-            success += 1
-            await asyncio.sleep(0.05)
-        except: pass
-    await message.answer(f"✅ Отправлено: {success}")
-    await state.clear()
-
-@router.callback_query(F.data == "admin_backup")
-async def admin_backup(callback: CallbackQuery):
-    try:
-        doc = FSInputFile(db.get_db_path())
-        await callback.message.answer_document(doc, caption="💾 Бэкап базы")
-    except Exception as e:
-        await callback.message.answer(f"Ошибка: {e}")
-    await callback.answer()
-
-# ==========================================
-# ХЕНДЛЕРЫ СТАРТА (С ФОТО)
-# ==========================================
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
+# ================== СТАРТ ==================
+@dp.message(CommandStart())
+async def start(message: Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-    user = db.get_user(user_id)
-    
     args = message.text.split()
-    param = args[1] if len(args) > 1 else None
-    
-    # Проверка промокода
-    if param and param.startswith("check_"):
-        promo = db.get_promo(param)
-        if not promo or promo['current_activations'] >= promo['max_activations']:
-            await message.answer("⚠️ Чек не найден или больше не активен.")
-            return
-        if db.check_promo_activation(param, user_id):
-            await message.answer("⚠️ Вы уже активировали этот чек.")
-            return
-        
-        # Активация
-        amount = round(random.uniform(promo['amount_min'], promo['amount_max']), 2)
-        db.activate_promo(param, user_id, amount)
-        await message.answer(f"🎉 Вы активировали чек и получили <b>{format_amount(amount)} ⭐</b>!")
-        return
+    ref_id = None
+    if len(args) > 1 and args[1].isdigit():
+        ref_id = int(args[1])
+        if ref_id == user_id: ref_id = None
 
-    if not user:
-        ref_id = None
-        ad_code = None
-        if param:
-            if param.isdigit():
-                ref_id = int(param)
-                if ref_id == user_id: ref_id = None
-            else:
-                ad_code = param
-        db.create_user(user_id, message.from_user.username, message.from_user.first_name, ref_id, ad_code)
-    
-    sponsors = db.get_sponsors()
-    if sponsors:
-        sp = sponsors[0]
-        await message.answer(
-            DEFAULTS["sub_text"].format(channel_name=sp['channel_name']),
-            reply_markup=kb.sub_check_kb(sp['channel_link'], sp['channel_name'])
-        )
+    is_new = db.add_user(user_id, message.from_user.username, ref_id)
+    if not is_new:
+        db.update_username(user_id, message.from_user.username)
+    else:
+        if ref_id: db.create_pending_referral(user_id, ref_id)
+
+    u = db.get_user(user_id)
+    if not u['welcome_bonus_paid']:
+        bonus = int(db.get_setting("welcome_bonus"))
+        db.add_balance(user_id, bonus)
+        db.mark_welcome_bonus_paid(user_id)
+        await message.answer(f"🎁 Вам начислен приветственный бонус: <b>{bonus} ⭐</b>")
+
+    passed = await check_op_and_proceed(message, user_id)
+    if not passed:
         return
 
     await send_main_menu(message)
 
 async def send_main_menu(message: Message):
-    text = DEFAULTS["menu_text"].format(ref_bonus=format_amount(REF_BONUS))
-    avatar = db.get_setting("menu_avatar")
-    
-    if avatar:
-        await message.answer_photo(photo=avatar, caption=text, reply_markup=kb.main_menu_kb())
-    else:
-        await message.answer(text, reply_markup=kb.main_menu_kb())
+    text = db.get_setting("menu_text").format(ref_bonus=db.get_setting("ref_bonus"))
+    await send_with_avatar(message, text, kb.main_menu_kb())
 
-@router.callback_query(F.data == "check_sub")
-async def process_sub_check(callback: CallbackQuery):
-    sponsors = db.get_sponsors()
-    if not sponsors:
-        await callback.message.delete()
-        await send_main_menu(callback.message)
-        return
-    sp = sponsors[0]
-    try:
-        member = await bot.get_chat_member(chat_id=sp['channel_id'], user_id=callback.from_user.id)
-        if member.status in ['member', 'administrator', 'creator']:
-            await callback.message.delete()
-            await send_main_menu(callback.message)
-            await callback.answer()
-        else:
-            await callback.answer("Вы не подписались на канал!", show_alert=True)
-    except:
-        await callback.answer("Ошибка проверки. Бот админ в канале?", show_alert=True)
+@dp.callback_query(F.data == "op_check")
+async def op_check_cb(call: CallbackQuery):
+    passed = await check_op_and_proceed(call, call.from_user.id)
+    if passed:
+        try: await call.message.delete()
+        except: pass
+        await send_main_menu(call.message)
+    await call.answer()
 
-# ==========================================
-# НАВИГАЦИЯ (ИСПРАВЛЕНО!)
-# ==========================================
-@router.callback_query(F.data == "menu_back")
-async def back_to_menu(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    try: await callback.message.delete()
+# ================== МЕНЮ ==================
+@dp.callback_query(F.data == "menu_back")
+async def back_to_menu(call: CallbackQuery):
+    try: await call.message.delete()
     except: pass
-    await send_main_menu(callback.message)
-    await callback.answer()
+    await send_main_menu(call.message)
+    await call.answer()
 
-# ==========================================
-# РЕФЕРАЛЫ, ПРОФИЛЬ, ВЫВОД, СТАТИСТИКА (ТЕКСТ)
-# ==========================================
-@router.callback_query(F.data == "menu_refs")
-async def show_refs(callback: CallbackQuery):
-    # ... (код рефов оставляем как был, только edit_text меняем на delete+answer для безопасности)
-    try: await callback.message.delete()
+@dp.callback_query(F.data == "menu_refs")
+async def show_refs(call: CallbackQuery):
+    try: await call.message.delete()
     except: pass
-    # Вставляем логику отправки рефов
-    await send_refs_menu(callback.message, callback.from_user.id)
-
-async def send_refs_menu(message: Message, user_id):
-    user = db.get_user(user_id)
+    uid = call.from_user.id
+    u = db.get_user(uid)
     bot_info = await bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
-    with db.get_conn() as conn:
-        refs = conn.execute("SELECT * FROM users WHERE referrer_id = ?", (user_id,)).fetchall()
+    ref_link = f"https://t.me/{bot_info.username}?start={uid}"
+    
+    refs = db.get_user_referrals(uid)
     ref_list_text = ""
     for r in refs:
         name = f"@{r['username']}" if r['username'] else f"id {r['user_id']}"
-        status = f"{r['tasks_completed']} заданий"
-        if r['tasks_completed'] < REF_TASKS_REQUIRED:
-            status = "проходит вход" if r['tasks_completed'] == 0 else f"{r['tasks_completed']} заданий"
+        status = "проходит ОП" if r['status'] == 'pending' else "✅ Засчитан"
         ref_list_text += f"├ {name} — {status}\n"
     if not ref_list_text: ref_list_text = "├ Пока никого нет\n"
-    text = DEFAULTS["ref_text"].format(
-        ref_bonus=format_amount(REF_BONUS), ref_tasks_required=REF_TASKS_REQUIRED,
-        ref_link=ref_link, total_refs=user['total_refs'], confirmed_refs=user['confirmed_refs'],
-        ref_list=ref_list_text, balance=format_amount(user['balance'])
+    
+    text = db.get_setting("ref_text").format(
+        ref_bonus=db.get_setting("ref_bonus"),
+        ref_link=ref_link,
+        total_refs=db.get_pending_refs_count(uid) + db.get_confirmed_refs_count(uid),
+        confirmed_refs=db.get_confirmed_refs_count(uid),
+        ref_list=ref_list_text,
+        balance=format_amount(u['balance'])
     )
-    await message.answer(text, reply_markup=kb.back_kb())
+    await send_with_avatar(call.message, text, kb.back_kb())
 
-@router.callback_query(F.data == "menu_profile")
-async def show_profile(callback: CallbackQuery):
-    try: await callback.message.delete()
+@dp.callback_query(F.data == "menu_profile")
+async def show_profile(call: CallbackQuery):
+    try: await call.message.delete()
     except: pass
-    user = db.get_user(callback.from_user.id)
-    name = f"@{user['username']}" if user['username'] else user['first_name']
-    text = DEFAULTS["profile_text"].format(
-        username=name, total_refs=user['total_refs'], total_earned=format_amount(user['total_earned']),
-        balance=format_amount(user['balance']), user_id=user['user_id'], tasks_completed=user['tasks_completed']
+    u = db.get_user(call.from_user.id)
+    name = f"@{u['username']}" if u['username'] else u['first_name']
+    text = db.get_setting("profile_text").format(
+        username=name,
+        total_refs=db.get_pending_refs_count(u['user_id']) + db.get_confirmed_refs_count(u['user_id']),
+        total_earned=format_amount(u['total_earned']),
+        balance=format_amount(u['balance']),
+        user_id=u['user_id'],
+        tasks_completed=db.get_task_stats()['count'] # Заглушка, лучше считать по user_id
     )
-    await callback.message.answer(text, reply_markup=kb.back_kb())
+    await send_with_avatar(call.message, text, kb.back_kb())
 
-@router.callback_query(F.data == "menu_withdraw")
-async def show_withdraw(callback: CallbackQuery, state: FSMContext):
-    try: await callback.message.delete()
+# ================== ЗАДАНИЯ ==================
+@dp.callback_query(F.data == "menu_earn")
+async def show_tasks(call: CallbackQuery):
+    try: await call.message.delete()
     except: pass
-    user = db.get_user(callback.from_user.id)
-    amounts_str = ", ".join(map(str, WITHDRAW_AMOUNTS))
-    text = DEFAULTS["withdraw_text"].format(balance=format_amount(user['balance']), amounts=amounts_str)
-    await callback.message.answer(text, reply_markup=kb.withdraw_kb())
-    await state.set_state(WithdrawState.waiting_amount)
-
-@router.callback_query(F.data == "menu_instruction")
-async def show_instruction(callback: CallbackQuery):
-    try: await callback.message.delete()
-    except: pass
-    await callback.message.answer(DEFAULTS["instruction_text"], reply_markup=kb.back_kb())
-
-@router.callback_query(F.data == "menu_stats")
-async def show_stats(callback: CallbackQuery):
-    try: await callback.message.delete()
-    except: pass
-    text = DEFAULTS["stats_text"].format(total_users=db.get_total_users(), total_withdrawn=format_amount(db.get_total_withdrawn()))
-    await callback.message.answer(text, reply_markup=kb.stats_kb())
-
-# ==========================================
-# ЗАДАНИЯ
-# ==========================================
-@router.callback_query(F.data == "menu_earn")
-async def show_tasks(callback: CallbackQuery):
-    try: await callback.message.delete()
-    except: pass
-    await send_next_task(callback.message, callback.from_user.id)
-    await callback.answer()
+    await send_next_task(call.message, call.from_user.id)
+    await call.answer()
 
 async def send_next_task(message: Message, user_id: int):
     task = db.get_pending_task(user_id)
@@ -551,101 +294,122 @@ async def send_next_task(message: Message, user_id: int):
         if not new_task:
             await message.answer("😔 На данный момент нет доступных заданий.", reply_markup=kb.back_kb())
             return
-        old_task = db.get_task_by_link(user_id, new_task["link"])
-        if old_task:
-            new_task = await fetch_new_task(user_id)
-            if not new_task or db.get_task_by_link(user_id, new_task["link"]):
-                await message.answer("😔 Больше нет новых заданий.", reply_markup=kb.back_kb())
-                return
-        db.save_task(user_id, new_task["service"], new_task["task_id"], new_task["link"], TASK_REWARD)
+        db.save_task(user_id, new_task["service"], new_task["task_id"], new_task["link"])
         task = db.get_pending_task(user_id)
-    if not task:
-        await message.answer("😔 Нет доступных заданий.", reply_markup=kb.back_kb())
-        return
-    text = DEFAULTS["task_text"].format(reward=format_amount(TASK_REWARD))
+
+    text = db.get_setting("task_text")
     await message.answer(text, reply_markup=kb.task_kb(task["link"]))
 
-@router.callback_query(F.data == "check_task")
-async def check_task(callback: CallbackQuery):
-    user_id = callback.from_user.id
+@dp.callback_query(F.data == "check_task")
+async def check_task(call: CallbackQuery):
+    user_id = call.from_user.id
     task = db.get_pending_task(user_id)
     if not task:
-        await callback.answer("Задание не найдено.", show_alert=True)
+        await call.answer("Задание не найдено.", show_alert=True)
         return
-    await callback.message.edit_text("⏳ Проверяем задание...")
+    await call.message.edit_text("⏳ Проверяем...")
     is_done = await check_task_status(task['service'], user_id, task['task_id'])
     if is_done:
-        db.add_balance(user_id, TASK_REWARD, "task")
-        db.mark_task_completed(user_id)
+        reward = float(db.get_setting("task_reward"))
+        db.add_balance(user_id, reward)
+        db.mark_task_completed(user_id, task['service'], task['task_id'], reward)
         db.mark_task_status(task['id'], 'done')
-        await callback.message.edit_text(f"✅ Задание выполнено! Начислено: {format_amount(TASK_REWARD)} ⭐")
+        await call.message.edit_text(f"✅ Выполнено! Начислено: {format_amount(reward)} ⭐")
         await asyncio.sleep(1.5)
-        await callback.message.delete()
-        await send_next_task(callback.message, user_id)
-    else:
-        await callback.message.edit_text("❌ Задание не выполнено.", reply_markup=kb.task_kb(task["link"]))
-    await callback.answer()
-
-@router.callback_query(F.data == "skip_task")
-async def skip_task(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    task = db.get_pending_task(user_id)
-    if task:
-        db.mark_task_status(task['id'], 'skipped')
-    await callback.answer("Задание пропущено", show_alert=True)
-    try: await callback.message.delete()
-    except: pass
-    await send_next_task(callback.message, user_id)
-
-# ==========================================
-# ВЫВОД
-# ==========================================
-@router.callback_query(WithdrawState.waiting_amount, F.data.startswith("wd_"))
-async def process_withdraw_button(callback: CallbackQuery, state: FSMContext):
-    amount = float(callback.data.split("_")[1])
-    await process_withdraw_request(callback.message, callback.from_user.id, amount)
-    await callback.answer()
-    await state.clear()
-
-async def process_withdraw_request(message: Message, user_id: int, amount: float):
-    user = db.get_user(user_id)
-    if user['balance'] < amount:
-        await message.answer(f"Не хватает звёзд. Баланс: {format_amount(user['balance'])} ⭐")
-        return
-    if user['confirmed_refs'] < WITHDRAW_FRIENDS_REQUIRED:
-        need = WITHDRAW_FRIENDS_REQUIRED - user['confirmed_refs']
-        await message.answer(f"⚠️ <b>Недостаточно друзей для вывода!</b>\n\nНужно: <b>{need}</b>.\nСейчас: <b>{user['confirmed_refs']}</b>.")
-        return
-    wd_id = db.create_withdraw(user_id, amount)
-    db.remove_balance(user_id, amount)
-    await message.answer(f"✅ Заявка <b>#{wd_id}</b> на <b>{format_amount(amount)}</b> ⭐ создана.", reply_markup=kb.back_kb())
-    for admin in ADMIN_IDS:
-        try: await bot.send_message(admin, f"💰 Новая заявка #{wd_id}")
+        try: await call.message.delete()
         except: pass
+        await send_next_task(call.message, user_id)
+    else:
+        await call.message.edit_text("❌ Не выполнено.", reply_markup=kb.task_kb(task["link"]))
+    await call.answer()
 
-# ==========================================
-# ЗАПУСК И АВТОБЭКАП (В ФОНЕ)
-# ==========================================
-async def auto_backup_worker():
-    # Фоновый воркер для бэкапа (простейший пример, лучше использовать aioschedule)
-    while True:
-        now = datetime.datetime.now()
-        # 8:00 и 20:00
-        if now.hour in [8, 20] and now.minute == 0:
-            for admin in ADMIN_IDS:
-                try:
-                    doc = FSInputFile(db.get_db_path())
-                    await bot.send_document(admin, doc, caption=f"💾 Автобэкап за {now.strftime('%d.%m.%Y %H:%M')}")
-                except: pass
-            await asyncio.sleep(60) # Ждем минуту, чтобы не спамить
-        await asyncio.sleep(30)
+@dp.callback_query(F.data == "skip_task")
+async def skip_task(call: CallbackQuery):
+    user_id = call.from_user.id
+    task = db.get_pending_task(user_id)
+    if task: db.mark_task_status(task['id'], 'skipped')
+    await call.answer("Пропущено", show_alert=True)
+    try: await call.message.delete()
+    except: pass
+    await send_next_task(call.message, user_id)
 
+# ================== СТАТИСТИКА (ТОПЫ) ==================
+@dp.callback_query(F.data == "menu_stats")
+async def show_stats(call: CallbackQuery):
+    try: await call.message.delete()
+    except: pass
+    text = db.get_setting("stats_text").format(
+        total_users=db.get_stats()['total'],
+        total_withdrawn=format_amount(db.get_stats()['total_stars'])
+    )
+    await send_with_avatar(call.message, text, kb.stats_kb())
+
+@dp.callback_query(F.data.startswith("top_"))
+async def show_top(call: CallbackQuery):
+    try: await call.message.delete()
+    except: pass
+    top_type = call.data.split("_")[1]
+    if top_type == "balance":
+        top = db.get_top_balance()
+        text = "💰 <b>Топ по балансу</b>\n\n"
+        for i, u in enumerate(top, 1):
+            name = f"@{u['username']}" if u['username'] else f"id {u['user_id']}"
+            text += f"{i}. {name} — {format_amount(u['balance'])} ⭐\n"
+    else:
+        top = db.get_top_refs()
+        text = "👥 <b>Топ по рефералам</b>\n\n"
+        for i, u in enumerate(top, 1):
+            name = f"@{u['username']}" if u['username'] else f"id {u['user_id']}"
+            text += f"{i}. {name} — {u['refs']}\n"
+            
+    await call.message.answer(text, reply_markup=kb.back_kb("menu_stats"))
+
+# ================== ВЫВОД ==================
+@dp.callback_query(F.data == "menu_withdraw")
+async def show_withdraw(call: CallbackQuery, state: FSMContext):
+    try: await call.message.delete()
+    except: pass
+    u = db.get_user(call.from_user.id)
+    amounts = ", ".join(map(str, WITHDRAW_AMOUNTS))
+    text = db.get_setting("withdraw_text").format(balance=format_amount(u['balance']), amounts=amounts)
+    await send_with_avatar(call.message, text, kb.withdraw_kb())
+    await state.set_state(WithdrawState.waiting_amount)
+
+@dp.callback_query(WithdrawState.waiting_amount, F.data.startswith("wd_"))
+async def process_wd_btn(call: CallbackQuery, state: FSMContext):
+    amount = float(call.data.split("_")[1])
+    await process_withdraw(call.message, call.from_user.id, amount)
+    await state.clear()
+    await call.answer()
+
+async def process_withdraw(message: Message, uid: int, amount: float):
+    u = db.get_user(uid)
+    if u['balance'] < amount:
+        await message.answer(f"Не хватает звёзд. Баланс: {format_amount(u['balance'])} ⭐")
+        return
+    req_friends = int(db.get_setting("withdraw_friends_required"))
+    if db.get_confirmed_refs_count(uid) < req_friends:
+        await message.answer(f"⚠️ <b>Недостаточно друзей!</b>\nНужно: {req_friends}")
+        return
+    
+    wid = db.create_withdrawal(uid, amount)
+    await message.answer(f"✅ Заявка #{wid} на {format_amount(amount)} ⭐ создана.", reply_markup=kb.back_kb())
+
+# ================== АДМИНКА ==================
+@dp.message(Command("admin"))
+async def admin(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    await message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
+
+@dp.callback_query(F.data == "admin_back")
+async def admin_back(call: CallbackQuery):
+    await call.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
+
+# ================== ЗАПУСК ==================
 async def main():
     db.init_db()
-    asyncio.create_task(auto_backup_worker()) # Запуск бэкапа
     print("Бот запущен!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import datetime
     asyncio.run(main())

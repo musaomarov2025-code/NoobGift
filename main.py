@@ -1,22 +1,18 @@
 import asyncio
-import json
-import os
-import random
-from datetime import datetime, timedelta
-from urllib.parse import quote
-
+import logging
 import aiohttp
+from datetime import datetime
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
-    Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    FSInputFile,
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 )
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import (
     BOT_TOKEN, ADMIN_ID, DB, WITHDRAW_AMOUNTS,
@@ -29,34 +25,19 @@ from config import (
 import database as db
 import keyboards as kb
 
+logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 # ================== FSM ==================
 class WithdrawState(StatesGroup):
     waiting_amount = State()
-    
-class AdminStates(StatesGroup):
-    waiting_sponsor_name = State()
-    waiting_sponsor_link = State()
-    waiting_sponsor_id = State()
-    waiting_give_stars = State()
-    waiting_broadcast = State()
-    waiting_avatar = State()
-    waiting_promo_sum = State()
-    waiting_promo_act = State()
-    waiting_setting_value = State()
-    waiting_user_info = State()
 
 # ================== ХЕЛПЕР ==================
-def _smart_text(message):
-    return message.html_text if message.entities else message.text
-
 def format_amount(amount):
     return f"{amount:.2f}".rstrip('0').rstrip('.') if amount % 1 else f"{amount:.0f}"
 
 async def send_with_avatar(message: Message, text: str, reply_markup=None):
-    # В твоем старом коде ава хранилась в priv, но мы можем использовать menu_avatar
     avatar = db.get_setting("menu_avatar")
     if avatar:
         await message.answer_photo(photo=avatar, caption=text, reply_markup=reply_markup)
@@ -81,8 +62,7 @@ async def bh_get_tasks(chat_id, count):
 
 async def collect_op_items(user_id):
     if not bh_enabled(): return []
-    try:
-        count = int(db.get_setting("botohub_entry_count") or 2)
+    try: count = int(db.get_setting("botohub_entry_count") or 2)
     except: count = 2
     data = await bh_get_tasks(user_id, count)
     tasks = data.get("tasks", [])
@@ -101,15 +81,15 @@ async def check_op_and_proceed(call_or_message, user_id):
             except: pass
         return True
     else:
-        text = db.get_setting("sub_text").format(channel_name="Спонсоры")
-        kb = kb.op_screen_kb(items)
+        text = db.get_setting("botohub_text") # Берем текст из твоего конфига
+        kb_op = kb.op_screen_kb(items)
         if isinstance(call_or_message, CallbackQuery):
-            await call_or_message.message.edit_text(text, reply_markup=kb)
+            await call_or_message.message.edit_text(text, reply_markup=kb_op)
         else:
-            await call_or_message.answer(text, reply_markup=kb)
+            await call_or_message.answer(text, reply_markup=kb_op)
         return False
 
-# ================== API СЕРВИСОВ ЗАДАНИЙ ==================
+# ================== API ЗАДАНИЙ ==================
 async def fetch_task_piarflow(user_id):
     headers = {"Authorization": f"Bearer {PIARFLOW_TOKEN}"}
     payload = {"user_id": user_id, "chat_id": user_id, "max_sponsors": 1}
@@ -187,7 +167,7 @@ async def check_task_status(service, user_id, task_id):
 
 # ================== СТАРТ ==================
 @dp.message(CommandStart())
-async def start(message: Message, state: FSMContext):
+async def start_cmd(message: Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
     args = message.text.split()
@@ -196,22 +176,15 @@ async def start(message: Message, state: FSMContext):
         ref_id = int(args[1])
         if ref_id == user_id: ref_id = None
 
+    # ВАЖНО: исправлено на db.add_user
     is_new = db.add_user(user_id, message.from_user.username, ref_id)
     if not is_new:
         db.update_username(user_id, message.from_user.username)
     else:
         if ref_id: db.create_pending_referral(user_id, ref_id)
 
-    u = db.get_user(user_id)
-    if not u['welcome_bonus_paid']:
-        bonus = int(db.get_setting("welcome_bonus"))
-        db.add_balance(user_id, bonus)
-        db.mark_welcome_bonus_paid(user_id)
-        await message.answer(f"🎁 Вам начислен приветственный бонус: <b>{bonus} ⭐</b>")
-
     passed = await check_op_and_proceed(message, user_id)
-    if not passed:
-        return
+    if not passed: return
 
     await send_main_menu(message)
 
@@ -268,14 +241,19 @@ async def show_profile(call: CallbackQuery):
     try: await call.message.delete()
     except: pass
     u = db.get_user(call.from_user.id)
-    name = f"@{u['username']}" if u['username'] else u['first_name']
+    name = f"@{u['username']}" if u['username'] else "Юзер"
+    
+    # Считаем задания именно этого юзера
+    with db.get_conn() as conn:
+        tasks_count = conn.execute("SELECT COUNT(*) FROM task_completed WHERE user_id = ?", (u['user_id'],)).fetchone()[0]
+    
     text = db.get_setting("profile_text").format(
         username=name,
         total_refs=db.get_pending_refs_count(u['user_id']) + db.get_confirmed_refs_count(u['user_id']),
         total_earned=format_amount(u['total_earned']),
         balance=format_amount(u['balance']),
         user_id=u['user_id'],
-        tasks_completed=db.get_task_stats()['count'] # Заглушка, лучше считать по user_id
+        tasks_completed=tasks_count
     )
     await send_with_avatar(call.message, text, kb.back_kb())
 
@@ -395,7 +373,7 @@ async def process_withdraw(message: Message, uid: int, amount: float):
     wid = db.create_withdrawal(uid, amount)
     await message.answer(f"✅ Заявка #{wid} на {format_amount(amount)} ⭐ создана.", reply_markup=kb.back_kb())
 
-# ================== АДМИНКА ==================
+# ================== АДМИНКА (Заглушки, чтобы не падало) ==================
 @dp.message(Command("admin"))
 async def admin(message: Message):
     if message.from_user.id != ADMIN_ID: return

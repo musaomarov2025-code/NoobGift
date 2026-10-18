@@ -1,4 +1,3 @@
-# keyboards.py
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import WITHDRAW_AMOUNTS
@@ -12,7 +11,7 @@ def main_menu_kb():
         text='Заработать звезды', 
         callback_data="menu_earn",
         icon_custom_emoji_id="6005661956931850799",
-        style="primary" # Синяя
+        style="primary"
     ))
     builder.row(
         InlineKeyboardButton(text='Рефералы', callback_data="menu_refs", icon_custom_emoji_id="5278467510604160626"),
@@ -108,7 +107,7 @@ def stats_kb():
 # ==========================================
 def admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎯 Спонсоры", callback_data="bh_menu"),
+        [InlineKeyboardButton(text="🎯 Спонсоры (ОП)", callback_data="bh_menu"),
          InlineKeyboardButton(text="📋 Заявки", callback_data="wd_list")],
         [InlineKeyboardButton(text="🎛 Приватка", callback_data="priv_menu"),
          InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
@@ -145,3 +144,54 @@ def wd_empty_kb():
 
 def back_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]])
+
+# ==========================================
+# АДМИНКА: СПОНСОРЫ (BOTOHUB)
+# ==========================================
+def bh_kb(enabled):
+    status = "🔴 Выключить" if enabled else "🟢 Включить"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Текст сообщения", callback_data="bh_edit_text"),
+         InlineKeyboardButton(text="📥 ОП на входе (кол-во)", callback_data="bh_edit_entry")],
+        [InlineKeyboardButton(text=status, callback_data="bh_toggle")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+# ==========================================
+# АДМИНКА: ЗАДАНИЯ
+# ==========================================
+def tasks_kb(enabled):
+    status = "🔴 Выключить" if enabled else "🟢 Включить"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Награда за задание", callback_data="tasks_edit_reward")],
+        [InlineKeyboardButton(text=status, callback_data="tasks_toggle")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+# ==========================================
+# АДМИНКА: ПРОМОКОДЫ И РЕКЛАМА
+# ==========================================
+def promos_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать промокод", callback_data="promo_create")],
+        [InlineKeyboardButton(text="📜 Список промокодов", callback_data="promo_list")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+def ad_menu_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить метку", callback_data="ad_add")],
+        [InlineKeyboardButton(text="📜 Список меток", callback_data="ad_list")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+# ==========================================
+# АДМИНКА: НАСТРОЙКИ
+# ==========================================
+def settings_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Бонус за реферала", callback_data="set:ref_bonus")],
+        [InlineKeyboardButton(text="🎁 Ежедневный бонус", callback_data="set:daily_bonus")],
+        [InlineKeyboardButton(text="👥 Друзей для вывода", callback_data="set:withdraw_friends_required")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])

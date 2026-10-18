@@ -5,7 +5,7 @@ ADMIN_ID = 8742164697
 DB = "/app/data/cows.db"
 
 # === ОП (Botohub) ===
-BOTOHUB_TOKEN = "1196d848-7318-4c55-a643-bc0d2e709525"
+BOTOHUB_TOKEN = "19ce7a66-92b1-46b6-b0b0-0c539703bb7c"
 BOTOHUB_URL = "https://botohub.me/get-tasks-extended"
 
 # === Задания (3 сервиса) ===

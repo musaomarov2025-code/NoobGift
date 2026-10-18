@@ -1,6 +1,5 @@
 import os
-
-BOT_TOKEN = "СЮДА_ВСТАВЬ_ТОКЕН_ОТ_BOTFATHER"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN_ID = 8742164697
 DB = "/app/data/cows.db"
 

@@ -9,7 +9,7 @@ from config import WITHDRAW_AMOUNTS
 def main_menu_kb():
     builder = InlineKeyboardBuilder()
     
-    # 1-й ряд: Заработать
+    # 1-й ряд: Заработать (синяя, если это url, или зеленая, если callback)
     builder.row(InlineKeyboardButton(
         text='Заработать звезды', 
         callback_data="menu_earn",
@@ -68,15 +68,18 @@ def sub_check_kb(channel_link):
 
 def task_kb(task_url):
     builder = InlineKeyboardBuilder()
+    # Кнопка перехода (синяя)
     builder.row(InlineKeyboardButton(
         text='Сделать задание', 
         url=task_url,
-        icon_custom_emoji_id="6311812139233316820" # 🤝
+        icon_custom_emoji_id="5472033358693280429" # 🐶 Собачка с ноутбуком
     ))
+    # Кнопки Проверить / Пропустить
     builder.row(
         InlineKeyboardButton(text='Проверить', callback_data="check_task", icon_custom_emoji_id="5251503375207392582"), # ✅
-        InlineKeyboardButton(text='SKIP Пропустить', callback_data="skip_task") # Без иконки, так как не было ID
+        InlineKeyboardButton(text='SKIP Пропустить', callback_data="skip_task", icon_custom_emoji_id="5251503375207392582") # Квадратик SKIP (если нужен другой ID, скинь)
     )
+    # Кнопка Назад
     builder.row(InlineKeyboardButton(
         text='Назад', 
         callback_data="menu_back",

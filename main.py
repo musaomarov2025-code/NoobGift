@@ -1,10 +1,12 @@
 import asyncio
-import logging
-import aiohttp
-from datetime import datetime
+import json
+import os
+import random
+from datetime import datetime, timedelta
 
+import aiohttp
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 )
@@ -12,7 +14,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import (
     BOT_TOKEN, ADMIN_ID, DB, WITHDRAW_AMOUNTS,
@@ -25,13 +26,26 @@ from config import (
 import database as db
 import keyboards as kb
 
-logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 # ================== FSM ==================
 class WithdrawState(StatesGroup):
     waiting_amount = State()
+
+class AdminStates(StatesGroup):
+    waiting_sponsor_name = State()
+    waiting_sponsor_link = State()
+    waiting_sponsor_id = State()
+    waiting_give_stars = State()
+    waiting_broadcast = State()
+    waiting_avatar = State()
+    waiting_promo_sum = State()
+    waiting_promo_act = State()
+    waiting_setting_value = State()
+    waiting_user_info = State()
+    waiting_ad_code = State()
+    waiting_ad_owner = State()
 
 # ================== ХЕЛПЕР ==================
 def format_amount(amount):
@@ -81,7 +95,7 @@ async def check_op_and_proceed(call_or_message, user_id):
             except: pass
         return True
     else:
-        text = db.get_setting("botohub_text") # Берем текст из твоего конфига
+        text = db.get_setting("botohub_text")
         kb_op = kb.op_screen_kb(items)
         if isinstance(call_or_message, CallbackQuery):
             await call_or_message.message.edit_text(text, reply_markup=kb_op)
@@ -165,7 +179,7 @@ async def check_task_status(service, user_id, task_id):
                     return data.get("subscribed") is True
     return False
 
-# ================== СТАРТ ==================
+# ================== СТАРТ И ОП ==================
 @dp.message(CommandStart())
 async def start_cmd(message: Message, state: FSMContext):
     await state.clear()
@@ -176,7 +190,6 @@ async def start_cmd(message: Message, state: FSMContext):
         ref_id = int(args[1])
         if ref_id == user_id: ref_id = None
 
-    # ВАЖНО: исправлено на db.add_user
     is_new = db.add_user(user_id, message.from_user.username, ref_id)
     if not is_new:
         db.update_username(user_id, message.from_user.username)
@@ -201,9 +214,10 @@ async def op_check_cb(call: CallbackQuery):
         await send_main_menu(call.message)
     await call.answer()
 
-# ================== МЕНЮ ==================
+# ================== МЕНЮ (РАЗДЕЛЫ) ==================
 @dp.callback_query(F.data == "menu_back")
-async def back_to_menu(call: CallbackQuery):
+async def back_to_menu(call: CallbackQuery, state: FSMContext):
+    await state.clear()
     try: await call.message.delete()
     except: pass
     await send_main_menu(call.message)
@@ -242,20 +256,84 @@ async def show_profile(call: CallbackQuery):
     except: pass
     u = db.get_user(call.from_user.id)
     name = f"@{u['username']}" if u['username'] else "Юзер"
-    
-    # Считаем задания именно этого юзера
-    with db.get_conn() as conn:
-        tasks_count = conn.execute("SELECT COUNT(*) FROM task_completed WHERE user_id = ?", (u['user_id'],)).fetchone()[0]
-    
     text = db.get_setting("profile_text").format(
         username=name,
         total_refs=db.get_pending_refs_count(u['user_id']) + db.get_confirmed_refs_count(u['user_id']),
         total_earned=format_amount(u['total_earned']),
         balance=format_amount(u['balance']),
         user_id=u['user_id'],
-        tasks_completed=tasks_count
+        tasks_completed=u['tasks_completed']
     )
     await send_with_avatar(call.message, text, kb.back_kb())
+
+@dp.callback_query(F.data == "menu_instruction")
+async def show_instruction(call: CallbackQuery):
+    try: await call.message.delete()
+    except: pass
+    await send_with_avatar(call.message, db.get_setting("instruction_text"), kb.back_kb())
+
+# ================== СТАТИСТИКА (ТОПЫ) ==================
+@dp.callback_query(F.data == "menu_stats")
+async def show_stats(call: CallbackQuery):
+    try: await call.message.delete()
+    except: pass
+    s = db.get_stats()
+    text = db.get_setting("stats_text").format(
+        total_users=s['total'],
+        total_withdrawn=format_amount(s['total_stars'])
+    )
+    await send_with_avatar(call.message, text, kb.stats_kb())
+
+@dp.callback_query(F.data.startswith("top_"))
+async def show_top(call: CallbackQuery):
+    try: await call.message.delete()
+    except: pass
+    top_type = call.data.split("_")[1]
+    if top_type == "balance":
+        top = db.get_top_balance()
+        text = "💰 <b>Топ по балансу</b>\n\n"
+        for i, u in enumerate(top, 1):
+            name = f"@{u['username']}" if u['username'] else f"id {u['user_id']}"
+            text += f"{i}. {name} — {format_amount(u['balance'])} ⭐\n"
+    else:
+        top = db.get_top_refs()
+        text = "👥 <b>Топ по рефералам</b>\n\n"
+        for i, u in enumerate(top, 1):
+            name = f"@{u['username']}" if u['username'] else f"id {u['user_id']}"
+            text += f"{i}. {name} — {u['refs']}\n"
+            
+    await send_with_avatar(call.message, text, kb.back_kb("menu_stats"))
+
+# ================== ВЫВОД ==================
+@dp.callback_query(F.data == "menu_withdraw")
+async def show_withdraw(call: CallbackQuery, state: FSMContext):
+    try: await call.message.delete()
+    except: pass
+    u = db.get_user(call.from_user.id)
+    amounts = ", ".join(map(str, WITHDRAW_AMOUNTS))
+    text = db.get_setting("withdraw_text").format(balance=format_amount(u['balance']), amounts=amounts)
+    await send_with_avatar(call.message, text, kb.withdraw_kb())
+    await state.set_state(WithdrawState.waiting_amount)
+
+@dp.callback_query(WithdrawState.waiting_amount, F.data.startswith("wd_"))
+async def process_wd_btn(call: CallbackQuery, state: FSMContext):
+    amount = float(call.data.split("_")[1])
+    await process_withdraw(call.message, call.from_user.id, amount)
+    await state.clear()
+    await call.answer()
+
+async def process_withdraw(message: Message, uid: int, amount: float):
+    u = db.get_user(uid)
+    if u['balance'] < amount:
+        await message.answer(f"Не хватает звёзд. Баланс: {format_amount(u['balance'])} ⭐")
+        return
+    req_friends = int(db.get_setting("withdraw_friends_required"))
+    if db.get_confirmed_refs_count(uid) < req_friends:
+        await message.answer(f"⚠️ <b>Недостаточно друзей!</b>\nНужно: {req_friends}")
+        return
+    
+    wid = db.create_withdrawal(uid, amount)
+    await message.answer(f"✅ Заявка #{wid} на {format_amount(amount)} ⭐ создана.", reply_markup=kb.back_kb())
 
 # ================== ЗАДАНИЯ ==================
 @dp.callback_query(F.data == "menu_earn")
@@ -272,10 +350,17 @@ async def send_next_task(message: Message, user_id: int):
         if not new_task:
             await message.answer("😔 На данный момент нет доступных заданий.", reply_markup=kb.back_kb())
             return
+        old_task = db.get_task_by_link(user_id, new_task["link"])
+        if old_task:
+            new_task = await fetch_new_task(user_id)
+            if not new_task or db.get_task_by_link(user_id, new_task["link"]):
+                await message.answer("😔 Больше нет новых заданий.", reply_markup=kb.back_kb())
+                return
+        
         db.save_task(user_id, new_task["service"], new_task["task_id"], new_task["link"])
         task = db.get_pending_task(user_id)
 
-    text = db.get_setting("task_text")
+    text = db.get_setting("task_text").format(reward=db.get_setting("task_reward"))
     await message.answer(text, reply_markup=kb.task_kb(task["link"]))
 
 @dp.callback_query(F.data == "check_task")
@@ -311,81 +396,109 @@ async def skip_task(call: CallbackQuery):
     except: pass
     await send_next_task(call.message, user_id)
 
-# ================== СТАТИСТИКА (ТОПЫ) ==================
-@dp.callback_query(F.data == "menu_stats")
-async def show_stats(call: CallbackQuery):
-    try: await call.message.delete()
-    except: pass
-    text = db.get_setting("stats_text").format(
-        total_users=db.get_stats()['total'],
-        total_withdrawn=format_amount(db.get_stats()['total_stars'])
-    )
-    await send_with_avatar(call.message, text, kb.stats_kb())
-
-@dp.callback_query(F.data.startswith("top_"))
-async def show_top(call: CallbackQuery):
-    try: await call.message.delete()
-    except: pass
-    top_type = call.data.split("_")[1]
-    if top_type == "balance":
-        top = db.get_top_balance()
-        text = "💰 <b>Топ по балансу</b>\n\n"
-        for i, u in enumerate(top, 1):
-            name = f"@{u['username']}" if u['username'] else f"id {u['user_id']}"
-            text += f"{i}. {name} — {format_amount(u['balance'])} ⭐\n"
-    else:
-        top = db.get_top_refs()
-        text = "👥 <b>Топ по рефералам</b>\n\n"
-        for i, u in enumerate(top, 1):
-            name = f"@{u['username']}" if u['username'] else f"id {u['user_id']}"
-            text += f"{i}. {name} — {u['refs']}\n"
-            
-    await call.message.answer(text, reply_markup=kb.back_kb("menu_stats"))
-
-# ================== ВЫВОД ==================
-@dp.callback_query(F.data == "menu_withdraw")
-async def show_withdraw(call: CallbackQuery, state: FSMContext):
-    try: await call.message.delete()
-    except: pass
-    u = db.get_user(call.from_user.id)
-    amounts = ", ".join(map(str, WITHDRAW_AMOUNTS))
-    text = db.get_setting("withdraw_text").format(balance=format_amount(u['balance']), amounts=amounts)
-    await send_with_avatar(call.message, text, kb.withdraw_kb())
-    await state.set_state(WithdrawState.waiting_amount)
-
-@dp.callback_query(WithdrawState.waiting_amount, F.data.startswith("wd_"))
-async def process_wd_btn(call: CallbackQuery, state: FSMContext):
-    amount = float(call.data.split("_")[1])
-    await process_withdraw(call.message, call.from_user.id, amount)
-    await state.clear()
-    await call.answer()
-
-async def process_withdraw(message: Message, uid: int, amount: float):
-    u = db.get_user(uid)
-    if u['balance'] < amount:
-        await message.answer(f"Не хватает звёзд. Баланс: {format_amount(u['balance'])} ⭐")
-        return
-    req_friends = int(db.get_setting("withdraw_friends_required"))
-    if db.get_confirmed_refs_count(uid) < req_friends:
-        await message.answer(f"⚠️ <b>Недостаточно друзей!</b>\nНужно: {req_friends}")
-        return
-    
-    wid = db.create_withdrawal(uid, amount)
-    await message.answer(f"✅ Заявка #{wid} на {format_amount(amount)} ⭐ создана.", reply_markup=kb.back_kb())
-
-# ================== АДМИНКА (Заглушки, чтобы не падало) ==================
+# ================== АДМИНКА ==================
 @dp.message(Command("admin"))
-async def admin(message: Message):
+async def admin(message: Message, state: FSMContext):
+    await state.clear()
     if message.from_user.id != ADMIN_ID: return
     await message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
 
-@dp.callback_query(F.data == "admin_back")
-async def admin_back(call: CallbackQuery):
+@dp.callback_query(F.data == "admin_back", StateFilter("*"))
+async def admin_back(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    if call.from_user.id != ADMIN_ID: return
     await call.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
+    await call.answer()
+
+# --- Настройки ---
+@dp.callback_query(F.data == "settings")
+async def admin_settings(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID: return
+    await call.message.edit_text(
+        f"⚙️ <b>Настройки</b>\n\n"
+        f"👥 Реф-бонус: <b>{db.get_setting('ref_bonus')}</b>\n"
+        f"💰 За задание: <b>{db.get_setting('task_reward')}</b>\n"
+        f"🤝 Друзей для вывода: <b>{db.get_setting('withdraw_friends_required')}</b>",
+        reply_markup=kb.settings_kb())
+
+@dp.callback_query(F.data.startswith("set:"))
+async def set_value_ask(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return
+    key = call.data.split(":")[1]
+    await state.update_data(set_key=key)
+    await call.message.answer("Введи новое значение:")
+    await state.set_state(AdminStates.waiting_setting_value)
+
+@dp.message(AdminStates.waiting_setting_value)
+async def set_value_save(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    data = await state.get_data()
+    db.set_setting(data['set_key'], message.text)
+    await state.clear()
+    await message.answer("✅ Сохранено", reply_markup=kb.back_admin_kb())
+
+# --- Ава ---
+@dp.callback_query(F.data == "admin_change_avatar")
+async def admin_change_avatar(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return
+    await call.message.answer("Отправь фото для меню:")
+    await state.set_state(AdminStates.waiting_avatar)
+
+@dp.message(AdminStates.waiting_avatar, F.photo)
+async def process_avatar(message: Message, state: FSMContext):
+    db.set_setting("menu_avatar", message.photo[-1].file_id)
+    await message.answer("✅ Ава обновлена!", reply_markup=kb.back_admin_kb())
+    await state.clear()
+
+# --- Начислить ---
+@dp.callback_query(F.data == "give_start")
+async def give_start(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return
+    await call.message.answer("Введи ID юзера и сумму через пробел (например: 123456789 50):")
+    await state.set_state(AdminStates.waiting_give_stars)
+
+@dp.message(AdminStates.waiting_give_stars)
+async def process_give_stars(message: Message, state: FSMContext):
+    try:
+        uid, amount = map(float, message.text.split())
+        db.add_balance(int(uid), amount)
+        await message.answer(f"✅ Начислено {amount} юзеру {int(uid)}", reply_markup=kb.back_admin_kb())
+    except: await message.answer("Ошибка. Введи ID и сумму.")
+    await state.clear()
+
+# --- Бэкап ---
+@dp.callback_query(F.data == "backup_help")
+async def backup_help(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID: return
+    try:
+        doc = FSInputFile(DB)
+        await call.message.answer_document(doc, caption="💾 Бэкап БД")
+    except Exception as e:
+        await call.message.answer(f"Ошибка: {e}")
+    await call.answer()
+
+# ================== ФОН: АВТО-БЭКАП ==================
+async def daily_backup():
+    while True:
+        try:
+            now = datetime.now()
+            targets = [now.replace(hour=8, minute=0, second=0, microsecond=0),
+                       now.replace(hour=20, minute=0, second=0, microsecond=0)]
+            next_run = next((t for t in targets if t > now), targets[0] + timedelta(days=1))
+            wait_seconds = (next_run - now).total_seconds()
+            await asyncio.sleep(wait_seconds)
+            
+            try:
+                doc = FSInputFile(DB)
+                await bot.send_document(ADMIN_ID, doc, caption=f"📦 <b>Авто-бэкап</b>\n{now.strftime('%d.%m.%Y %H:%M')}")
+            except: pass
+        except Exception:
+            await asyncio.sleep(3600)
 
 # ================== ЗАПУСК ==================
 async def main():
     db.init_db()
+    asyncio.create_task(daily_backup())
     print("Бот запущен!")
     await dp.start_polling(bot)
 

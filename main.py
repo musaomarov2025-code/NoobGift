@@ -3,17 +3,21 @@ import json
 import os
 import random
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command, StateFilter
+from aiogram.filters import CommandStart, Command
 from aiogram.types import (
-    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    FSInputFile,
 )
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import (
     BOT_TOKEN, ADMIN_ID, DB, WITHDRAW_AMOUNTS,
@@ -29,25 +33,10 @@ import keyboards as kb
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# ================== FSM ==================
-class WithdrawState(StatesGroup):
-    waiting_amount = State()
-
-class AdminStates(StatesGroup):
-    waiting_sponsor_name = State()
-    waiting_sponsor_link = State()
-    waiting_sponsor_id = State()
-    waiting_give_stars = State()
-    waiting_broadcast = State()
-    waiting_avatar = State()
-    waiting_promo_sum = State()
-    waiting_promo_act = State()
-    waiting_setting_value = State()
-    waiting_user_info = State()
-    waiting_ad_code = State()
-    waiting_ad_owner = State()
-
 # ================== ХЕЛПЕР ==================
+def _smart_text(message):
+    return message.html_text if message.entities else message.text
+
 def format_amount(amount):
     return f"{amount:.2f}".rstrip('0').rstrip('.') if amount % 1 else f"{amount:.0f}"
 
@@ -57,6 +46,21 @@ async def send_with_avatar(message: Message, text: str, reply_markup=None):
         await message.answer_photo(photo=avatar, caption=text, reply_markup=reply_markup)
     else:
         await message.answer(text=text, reply_markup=reply_markup)
+
+# ================== FSM ==================
+class WithdrawState(StatesGroup):
+    waiting_amount = State()
+
+class AdminStates(StatesGroup):
+    waiting_promo_sum = State()
+    waiting_promo_act = State()
+    waiting_setting_value = State()
+    waiting_give_stars = State()
+    waiting_user_info = State()
+    waiting_broadcast = State()
+    waiting_avatar = State()
+    waiting_ad_code = State()
+    waiting_ad_owner = State()
 
 # ================== BOTOHUB (ОП) ==================
 def bh_enabled():
@@ -71,7 +75,6 @@ async def bh_get_tasks(chat_id, count):
             async with s.post(BOTOHUB_URL, json=payload, headers=headers, timeout=15) as r:
                 return await r.json()
     except Exception as e:
-        print("Botohub ОП error:", e)
         return {"tasks": [], "completed": True, "skip": True}
 
 async def collect_op_items(user_id):
@@ -91,7 +94,7 @@ async def check_op_and_proceed(call_or_message, user_id):
             ref_bonus = int(db.get_setting("ref_bonus"))
             db.add_balance(ref_id, ref_bonus)
             try:
-                await bot.send_message(ref_id, f'<tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji> Твой реферал прошел ОП: <b>+{ref_bonus} ⭐</b>')
+                await bot.send_message(ref_id, f'<tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji> Твой реферал прошел Обязательную подписку: <b>+{ref_bonus} ⭐</b>')
             except: pass
         return True
     else:
@@ -103,7 +106,7 @@ async def check_op_and_proceed(call_or_message, user_id):
             await call_or_message.answer(text, reply_markup=kb_op)
         return False
 
-# ================== API ЗАДАНИЙ ==================
+# ================== API ЗАДАНИЙ (3 СЕРВИСА) ==================
 async def fetch_task_piarflow(user_id):
     headers = {"Authorization": f"Bearer {PIARFLOW_TOKEN}"}
     payload = {"user_id": user_id, "chat_id": user_id, "max_sponsors": 1}
@@ -113,8 +116,7 @@ async def fetch_task_piarflow(user_id):
                 if r.status == 200:
                     data = await r.json()
                     sponsors = data.get("sponsors", [])
-                    if sponsors:
-                        return {"service": "piarflow", "task_id": sponsors[0]["link"], "link": sponsors[0]["link"]}
+                    if sponsors: return {"service": "piarflow", "task_id": sponsors[0]["link"], "link": sponsors[0]["link"]}
         except: pass
     return None
 
@@ -178,8 +180,7 @@ async def check_task_status(service, user_id, task_id):
                     data = await r.json()
                     return data.get("subscribed") is True
     return False
-
-# ================== СТАРТ И ОП ==================
+    # ================== СТАРТ, ПРИВАТКА И ОП ==================
 @dp.message(CommandStart())
 async def start_cmd(message: Message, state: FSMContext):
     await state.clear()
@@ -191,14 +192,23 @@ async def start_cmd(message: Message, state: FSMContext):
         if ref_id == user_id: ref_id = None
 
     is_new = db.add_user(user_id, message.from_user.username, ref_id)
-    if not is_new:
+    if not is_new: 
         db.update_username(user_id, message.from_user.username)
     else:
         if ref_id: db.create_pending_referral(user_id, ref_id)
 
+    # 1. Приватка (если включена)
+    if db.get_setting("priv_enabled") == "1":
+        priv_text = db.get_setting("priv_text")
+        # Если нужно, здесь можно добавить кнопки приватки из настроек
+        await message.answer(priv_text, parse_mode="HTML")
+        await asyncio.sleep(3) # Пауза 3 секунды
+
+    # 2. Обязательная подписка (Botohub)
     passed = await check_op_and_proceed(message, user_id)
     if not passed: return
 
+    # 3. Меню
     await send_main_menu(message)
 
 async def send_main_menu(message: Message):
@@ -214,7 +224,7 @@ async def op_check_cb(call: CallbackQuery):
         await send_main_menu(call.message)
     await call.answer()
 
-# ================== МЕНЮ (РАЗДЕЛЫ) ==================
+# ================== МЕНЮ: РАЗДЕЛЫ ==================
 @dp.callback_query(F.data == "menu_back")
 async def back_to_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -236,7 +246,7 @@ async def show_refs(call: CallbackQuery):
     ref_list_text = ""
     for r in refs:
         name = f"@{r['username']}" if r['username'] else f"id {r['user_id']}"
-        status = "проходит ОП" if r['status'] == 'pending' else "✅ Засчитан"
+        status = "проходит подписку" if r['status'] == 'pending' else "✅ Засчитан"
         ref_list_text += f"├ {name} — {status}\n"
     if not ref_list_text: ref_list_text = "├ Пока никого нет\n"
     
@@ -272,7 +282,6 @@ async def show_instruction(call: CallbackQuery):
     except: pass
     await send_with_avatar(call.message, db.get_setting("instruction_text"), kb.back_kb())
 
-# ================== СТАТИСТИКА (ТОПЫ) ==================
 @dp.callback_query(F.data == "menu_stats")
 async def show_stats(call: CallbackQuery):
     try: await call.message.delete()
@@ -333,7 +342,11 @@ async def process_withdraw(message: Message, uid: int, amount: float):
         return
     
     wid = db.create_withdrawal(uid, amount)
-    await message.answer(f"✅ Заявка #{wid} на {format_amount(amount)} ⭐ создана.", reply_markup=kb.back_kb())
+    text = (
+        f'<tg-emoji emoji-id="6026257381678124710">✅</tg-emoji> Заявка <b>#{wid}</b> на <b>{format_amount(amount)}</b> ⭐ создана.\n\n'
+        f'Срок вывода: 5 минут — 24 часа.'
+    )
+    await message.answer(text, reply_markup=kb.back_kb())
 
 # ================== ЗАДАНИЯ ==================
 @dp.callback_query(F.data == "menu_earn")
@@ -367,9 +380,7 @@ async def send_next_task(message: Message, user_id: int):
 async def check_task(call: CallbackQuery):
     user_id = call.from_user.id
     task = db.get_pending_task(user_id)
-    if not task:
-        await call.answer("Задание не найдено.", show_alert=True)
-        return
+    if not task: return await call.answer("Задание не найдено.", show_alert=True)
     await call.message.edit_text("⏳ Проверяем...")
     is_done = await check_task_status(task['service'], user_id, task['task_id'])
     if is_done:
@@ -388,15 +399,13 @@ async def check_task(call: CallbackQuery):
 
 @dp.callback_query(F.data == "skip_task")
 async def skip_task(call: CallbackQuery):
-    user_id = call.from_user.id
-    task = db.get_pending_task(user_id)
+    task = db.get_pending_task(call.from_user.id)
     if task: db.mark_task_status(task['id'], 'skipped')
     await call.answer("Пропущено", show_alert=True)
     try: await call.message.delete()
     except: pass
-    await send_next_task(call.message, user_id)
-
-# ================== АДМИНКА ==================
+    await send_next_task(call.message, call.from_user.id)
+    # ================== АДМИНКА ==================
 @dp.message(Command("admin"))
 async def admin(message: Message, state: FSMContext):
     await state.clear()
@@ -407,8 +416,25 @@ async def admin(message: Message, state: FSMContext):
 async def admin_back(call: CallbackQuery, state: FSMContext):
     await state.clear()
     if call.from_user.id != ADMIN_ID: return
-    await call.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
+    try:
+        await call.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
+    except:
+        await call.message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
     await call.answer()
+
+# --- Статистика ---
+@dp.callback_query(F.data == "stats")
+async def admin_stats(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID: return
+    s = db.get_stats()
+    await call.message.edit_text(
+        f"📊 <b>Статистика</b>\n\n"
+        f"👥 Юзеров: {s['total']}\n"
+        f"💰 Баланс: {s['total_balance']}\n"
+        f"📋 Заявок: {s['pending']}\n"
+        f"✅ Выполнено: {s['done']}",
+        reply_markup=kb.back_admin_kb()
+    )
 
 # --- Настройки ---
 @dp.callback_query(F.data == "settings")
@@ -419,7 +445,8 @@ async def admin_settings(call: CallbackQuery):
         f"👥 Реф-бонус: <b>{db.get_setting('ref_bonus')}</b>\n"
         f"💰 За задание: <b>{db.get_setting('task_reward')}</b>\n"
         f"🤝 Друзей для вывода: <b>{db.get_setting('withdraw_friends_required')}</b>",
-        reply_markup=kb.settings_kb())
+        reply_markup=kb.settings_kb()
+    )
 
 @dp.callback_query(F.data.startswith("set:"))
 async def set_value_ask(call: CallbackQuery, state: FSMContext):
@@ -437,7 +464,94 @@ async def set_value_save(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Сохранено", reply_markup=kb.back_admin_kb())
 
-# --- Ава ---
+# --- Начислить звезды ---
+@dp.callback_query(F.data == "give_start")
+async def give_start(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return
+    await call.message.answer("Введи ID юзера и сумму через пробел:")
+    await state.set_state(AdminStates.waiting_give_stars)
+
+@dp.message(AdminStates.waiting_give_stars)
+async def process_give_stars(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        uid, amount = map(float, message.text.split())
+        db.add_balance(int(uid), amount)
+        await message.answer(f"✅ Начислено {format_amount(amount)} ⭐ юзеру {int(uid)}", reply_markup=kb.back_admin_kb())
+    except: 
+        await message.answer("Ошибка. Введи ID и сумму.")
+    await state.clear()
+
+# --- Заявки на вывод ---
+async def _render_wd_page(call_or_message, idx=0):
+    wds = db.get_pending_withdrawals()
+    if not wds:
+        if isinstance(call_or_message, CallbackQuery):
+            await call_or_message.message.edit_text("📭 Заявок нет", reply_markup=kb.back_admin_kb())
+        else:
+            await call_or_message.answer("📭 Заявок нет", reply_markup=kb.back_admin_kb())
+        return
+    if idx < 0: idx = 0
+    if idx >= len(wds): idx = len(wds) - 1
+    wd = wds[idx]
+    text = f"💸 <b>Заявка #{wd['id']}</b>\n👤 ID: <code>{wd['user_id']}</code>\n💰 Сумма: <b>{format_amount(wd['amount'])}</b> ⭐"
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Одобрить", callback_data=f"wd_ok:{wd['id']}"),
+        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"wd_no:{wd['id']}")
+    )
+    builder.row(
+        InlineKeyboardButton(text="⬅️", callback_data=f"wd_page:{idx-1}"),
+        InlineKeyboardButton(text=f"{idx+1}/{len(wds)}", callback_data="ignore"),
+        InlineKeyboardButton(text="➡️", callback_data=f"wd_page:{idx+1}")
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
+    
+    if isinstance(call_or_message, CallbackQuery):
+        try: await call_or_message.message.edit_text(text, reply_markup=builder.as_markup())
+        except: pass
+    else:
+        await call_or_message.answer(text, reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data == "wd_list")
+async def wd_list(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID: return
+    await _render_wd_page(call, 0)
+
+@dp.callback_query(F.data.startswith("wd_page:"))
+async def wd_page(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID: return
+    idx = int(call.data.split(":")[1])
+    await _render_wd_page(call, idx)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("wd_ok:"))
+async def wd_ok(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID: return
+    wid = int(call.data.split(":")[1])
+    db.set_withdrawal_status(wid, "completed")
+    wd = db.get_withdrawal(wid)
+    try:
+        await bot.send_message(wd['user_id'], f"✅ Заявка #{wid} на {format_amount(wd['amount'])} ⭐ выплачена!")
+    except: pass
+    await call.answer("Одобрено")
+    await _render_wd_page(call, 0)
+
+@dp.callback_query(F.data.startswith("wd_no:"))
+async def wd_no(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID: return
+    wid = int(call.data.split(":")[1])
+    db.set_withdrawal_status(wid, "rejected")
+    wd = db.get_withdrawal(wid)
+    db.add_balance(wd['user_id'], wd['amount'])
+    try:
+        await bot.send_message(wd['user_id'], f"❌ Заявка #{wid} отклонена, звезды возвращены.")
+    except: pass
+    await call.answer("Отклонено")
+    await _render_wd_page(call, 0)
+
+# --- Смена Авы ---
 @dp.callback_query(F.data == "admin_change_avatar")
 async def admin_change_avatar(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID: return
@@ -450,21 +564,28 @@ async def process_avatar(message: Message, state: FSMContext):
     await message.answer("✅ Ава обновлена!", reply_markup=kb.back_admin_kb())
     await state.clear()
 
-# --- Начислить ---
-@dp.callback_query(F.data == "give_start")
-async def give_start(call: CallbackQuery, state: FSMContext):
+# --- Рассылка ---
+@dp.callback_query(F.data == "broadcast_menu")
+async def broadcast_menu(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID: return
-    await call.message.answer("Введи ID юзера и сумму через пробел (например: 123456789 50):")
-    await state.set_state(AdminStates.waiting_give_stars)
+    await call.message.edit_text("📢 Отправь текст (или фото с текстом) для рассылки:", reply_markup=kb.back_admin_kb())
 
-@dp.message(AdminStates.waiting_give_stars)
-async def process_give_stars(message: Message, state: FSMContext):
-    try:
-        uid, amount = map(float, message.text.split())
-        db.add_balance(int(uid), amount)
-        await message.answer(f"✅ Начислено {amount} юзеру {int(uid)}", reply_markup=kb.back_admin_kb())
-    except: await message.answer("Ошибка. Введи ID и сумму.")
-    await state.clear()
+@dp.message(F.text | F.photo, StateFilter(None))
+async def process_broadcast(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    users = db.get_all_user_ids()
+    await message.answer(f"Начинаю рассылку для {len(users)}...")
+    success = 0
+    for u in users:
+        try:
+            if message.photo:
+                await bot.send_photo(u, message.photo[-1].file_id, caption=message.html_text)
+            else:
+                await bot.send_message(u, message.html_text)
+            success += 1
+            await asyncio.sleep(0.05)
+        except: pass
+    await message.answer(f"✅ Отправлено: {success}", reply_markup=kb.back_admin_kb())
 
 # --- Бэкап ---
 @dp.callback_query(F.data == "backup_help")
@@ -482,17 +603,14 @@ async def daily_backup():
     while True:
         try:
             now = datetime.now()
-            targets = [now.replace(hour=8, minute=0, second=0, microsecond=0),
-                       now.replace(hour=20, minute=0, second=0, microsecond=0)]
+            targets = [now.replace(hour=8, minute=0, second=0, microsecond=0), now.replace(hour=20, minute=0, second=0, microsecond=0)]
             next_run = next((t for t in targets if t > now), targets[0] + timedelta(days=1))
-            wait_seconds = (next_run - now).total_seconds()
-            await asyncio.sleep(wait_seconds)
-            
+            await asyncio.sleep((next_run - now).total_seconds())
             try:
                 doc = FSInputFile(DB)
-                await bot.send_document(ADMIN_ID, doc, caption=f"📦 <b>Авто-бэкап</b>\n{now.strftime('%d.%m.%Y %H:%M')}")
+                await bot.send_document(ADMIN_ID, doc, caption=f"📦 Авто-бэкап\n{now.strftime('%d.%m.%Y %H:%M')}")
             except: pass
-        except Exception:
+        except Exception: 
             await asyncio.sleep(3600)
 
 # ================== ЗАПУСК ==================

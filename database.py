@@ -12,59 +12,42 @@ def init_db():
     with get_conn() as conn:
         cur = conn.cursor()
         
-        # Пользователи
+        # 1. Юзеры (добавлена колонка ad_code для рекламы)
         cur.execute("""CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0, 
             total_earned REAL DEFAULT 0.0, tasks_completed INTEGER DEFAULT 0,
             last_bonus TEXT, referrer_id INTEGER, registered_at TEXT, 
             passed_op INTEGER DEFAULT 0, welcome_bonus_paid INTEGER DEFAULT 0,
-            is_banned INTEGER DEFAULT 0
+            ad_code TEXT DEFAULT NULL
         )""")
         
-        # Рефералы
-        cur.execute("""CREATE TABLE IF NOT EXISTS referrals (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, referrer_id INTEGER, created_at TEXT, status TEXT DEFAULT 'pending')""")
+        # 2. Рефералы
+        cur.execute("""CREATE TABLE IF NOT EXISTS referrals (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, referrer_id INTEGER, created_at TEXT, reminded INTEGER DEFAULT 0, status TEXT DEFAULT 'pending')""")
         
-        # Выводы
+        # 3. Выводы
         cur.execute("""CREATE TABLE IF NOT EXISTS withdrawals (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, status TEXT DEFAULT 'pending', created_at TEXT)""")
         
-        # Настройки (тексты, ава)
+        # 4. Настройки
         cur.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
         
-        # Интеграции (Сервисы: Botohub, PiarFlow, Tgrass, Trafsly, SubGram, Flyer)
-        cur.execute("""CREATE TABLE IF NOT EXISTS integrations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,      -- botohub, piarflow, tgrass и т.д.
-            api_key TEXT,
-            status TEXT DEFAULT 'off', -- on / off
-            role TEXT DEFAULT 'tasks'  -- tasks / op
-        )""")
+        # 5. Промокоды (добавлены поля для ОП: is_op, op_service, op_count)
+        cur.execute("""CREATE TABLE IF NOT EXISTS promos (code TEXT PRIMARY KEY, amount REAL, max_uses INTEGER, used INTEGER DEFAULT 0, active INTEGER DEFAULT 1, is_op INTEGER DEFAULT 0, op_service TEXT, op_count INTEGER DEFAULT 0)""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS promo_uses (code TEXT, user_id INTEGER, used_at TEXT, PRIMARY KEY (code, user_id))""")
         
-        # Задания
+        # 6. Задания
         cur.execute("""CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, service TEXT, task_id TEXT, link TEXT, status TEXT DEFAULT 'pending', created_at TEXT)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS task_completed (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, service TEXT, task_id TEXT, reward REAL, done_at TEXT)""")
         
-        # Промокоды (Обычные и с ОП)
-        cur.execute("""CREATE TABLE IF NOT EXISTS promos (
-            code TEXT PRIMARY KEY, 
-            amount REAL, 
-            max_uses INTEGER, 
-            used INTEGER DEFAULT 0, 
-            active INTEGER DEFAULT 1,
-            is_op INTEGER DEFAULT 0,     -- 0 обычный, 1 с ОП
-            op_service TEXT,             -- botohub, subgram, flyer
-            op_count INTEGER DEFAULT 0   -- сколько спонсоров пройти
-        )""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS promo_uses (code TEXT, user_id INTEGER, used_at TEXT, PRIMARY KEY (code, user_id))""")
+        # 7. Реклама (добавлена колонка price)
+        cur.execute("""CREATE TABLE IF NOT EXISTS ad_sources (code TEXT PRIMARY KEY, owner_id INTEGER, created_at TEXT, clicks INTEGER DEFAULT 0, price REAL DEFAULT 0)""")
         
-        # Реклама
-        cur.execute("""CREATE TABLE IF NOT EXISTS ad_sources (code TEXT PRIMARY KEY, owner_id INTEGER, price REAL, created_at TEXT, clicks INTEGER DEFAULT 0)""")
+        # 8. Интеграции (новая таблица для сервисов)
+        cur.execute("""CREATE TABLE IF NOT EXISTS integrations (name TEXT PRIMARY KEY, api_key TEXT DEFAULT '', status TEXT DEFAULT 'off', role TEXT DEFAULT 'tasks')""")
+        services = [('botohub', 'op'), ('piarflow', 'tasks'), ('tgrass', 'tasks'), ('trafsly', 'tasks'), ('subgram', 'tasks'), ('flyer', 'tasks')]
+        for name, role in services:
+            cur.execute("INSERT OR IGNORE INTO integrations (name, role) VALUES (?, ?)", (name, role))
 
-        # Добавление дефолтных сервисов в таблицу интеграций
-        defaults_services = ['botohub', 'piarflow', 'tgrass', 'trafsly', 'subgram', 'flyer']
-        for srv in defaults_services:
-            cur.execute("INSERT OR IGNORE INTO integrations (name, status, role) VALUES (?, 'off', 'tasks')", (srv,))
-
-        # Автодобавление колонок для старых баз (на всякий случай)
+        # ================= АВТО-МИГРАЦИИ (БЕЗОПАСНОЕ ДОБАВЛЕНИЕ КОЛОНОК) =================
         cur.execute("PRAGMA table_info(users)")
         cols = {r[1] for r in cur.fetchall()}
         if "total_earned" not in cols: cur.execute("ALTER TABLE users ADD COLUMN total_earned REAL DEFAULT 0.0")
@@ -72,23 +55,23 @@ def init_db():
         if "passed_op" not in cols: cur.execute("ALTER TABLE users ADD COLUMN passed_op INTEGER DEFAULT 0")
         if "welcome_bonus_paid" not in cols: cur.execute("ALTER TABLE users ADD COLUMN welcome_bonus_paid INTEGER DEFAULT 0")
         if "registered_at" not in cols: cur.execute("ALTER TABLE users ADD COLUMN registered_at TEXT")
-        if "is_banned" not in cols: cur.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
-
-        cur.execute("PRAGMA table_info(tasks)")
-        cols_tasks = {r[1] for r in cur.fetchall()}
-        if "created_at" not in cols_tasks: cur.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
+        if "ad_code" not in cols: cur.execute("ALTER TABLE users ADD COLUMN ad_code TEXT DEFAULT NULL")
 
         cur.execute("PRAGMA table_info(ad_sources)")
         cols_ads = {r[1] for r in cur.fetchall()}
-        if "price" not in cols_ads: cur.execute("ALTER TABLE ad_sources ADD COLUMN price REAL DEFAULT 0.0")
+        if "price" not in cols_ads: cur.execute("ALTER TABLE ad_sources ADD COLUMN price REAL DEFAULT 0")
 
-        # Дефолтные настройки из config.py
+        cur.execute("PRAGMA table_info(promos)")
+        cols_promo = {r[1] for r in cur.fetchall()}
+        if "is_op" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN is_op INTEGER DEFAULT 0")
+        if "op_service" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_service TEXT")
+        if "op_count" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_count INTEGER DEFAULT 0")
+
         for k, v in DEFAULTS.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
-            
         conn.commit()
 
-# ================== НАСТРОЙКИ ==================
+# ================= ФУНКЦИИ НАСТРОЕК =================
 def get_setting(key):
     with get_conn() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -99,39 +82,15 @@ def set_setting(key, value):
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
         conn.commit()
 
-# ================== ИНТЕГРАЦИИ ==================
-def get_integration(name):
-    with get_conn() as conn:
-        return conn.execute("SELECT * FROM integrations WHERE name = ?", (name,)).fetchone()
-
-def get_all_integrations():
-    with get_conn() as conn:
-        return conn.execute("SELECT * FROM integrations").fetchall()
-
-def update_integration_key(name, api_key):
-    with get_conn() as conn:
-        conn.execute("UPDATE integrations SET api_key = ? WHERE name = ?", (api_key, name))
-        conn.commit()
-
-def toggle_integration(name, status):
-    with get_conn() as conn:
-        conn.execute("UPDATE integrations SET status = ? WHERE name = ?", (status, name))
-        conn.commit()
-
-def set_integration_role(name, role):
-    with get_conn() as conn:
-        conn.execute("UPDATE integrations SET role = ? WHERE name = ?", (role, name))
-        conn.commit()
-
-# ================== ЮЗЕРЫ ==================
+# ================= ФУНКЦИИ ЮЗЕРОВ =================
 def get_user(user_id):
     with get_conn() as conn:
         return conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
 
 def get_user_by_username(username):
     with get_conn() as conn:
-        clean = username.replace("@", "")
-        return conn.execute("SELECT * FROM users WHERE username = ?", (clean,)).fetchone()
+        uname = username.replace('@', '')
+        return conn.execute("SELECT * FROM users WHERE username = ?", (uname,)).fetchone()
 
 def add_user(user_id, username, referrer_id=None):
     if get_user(user_id): return False
@@ -145,6 +104,11 @@ def update_username(user_id, username):
         conn.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
         conn.commit()
 
+def toggle_ban(user_id, ban_status):
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (ban_status, user_id))
+        conn.commit()
+
 def add_balance(user_id, amount):
     with get_conn() as conn:
         conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?", (amount, amount, user_id))
@@ -155,22 +119,17 @@ def remove_balance(user_id, amount):
         conn.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
         conn.commit()
 
-def toggle_ban(user_id, ban_status):
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (ban_status, user_id))
-        conn.commit()
-
 def set_op_passed(user_id):
     with get_conn() as conn:
         conn.execute("UPDATE users SET passed_op = 1 WHERE user_id = ?", (user_id,))
         conn.commit()
 
-def mark_welcome_bonus_paid(user_id):
+def set_user_ad_code(user_id, code):
     with get_conn() as conn:
-        conn.execute("UPDATE users SET welcome_bonus_paid = 1 WHERE user_id = ?", (user_id,))
+        conn.execute("UPDATE users SET ad_code = ? WHERE user_id = ?", (code, user_id))
         conn.commit()
 
-# ================== РЕФЕРАЛЫ ==================
+# ================= ФУНКЦИИ РЕФЕРАЛОВ =================
 def create_pending_referral(user_id, referrer_id):
     with get_conn() as conn:
         conn.execute("INSERT INTO referrals (user_id, referrer_id, created_at, status) VALUES (?, ?, ?, 'pending')", (user_id, referrer_id, datetime.now().isoformat()))
@@ -198,7 +157,7 @@ def get_user_referrals(referrer_id):
     with get_conn() as conn:
         return conn.execute("SELECT r.user_id, u.username, r.created_at, r.status FROM referrals r LEFT JOIN users u ON u.user_id = r.user_id WHERE r.referrer_id = ? ORDER BY r.created_at DESC", (referrer_id,)).fetchall()
 
-# ================== ВЫВОД ==================
+# ================= ФУНКЦИИ ВЫВОДА =================
 def create_withdrawal(user_id, amount):
     with get_conn() as conn:
         cur = conn.cursor()
@@ -221,7 +180,7 @@ def set_withdrawal_status(wid, status):
         conn.execute("UPDATE withdrawals SET status = ? WHERE id = ?", (status, wid))
         conn.commit()
 
-# ================== ЗАДАНИЯ ==================
+# ================= ФУНКЦИИ ЗАДАНИЙ =================
 def save_task(user_id, service, task_id, link):
     with get_conn() as conn:
         conn.execute("INSERT INTO tasks (user_id, service, task_id, link, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)", (user_id, service, task_id, link, datetime.now().isoformat()))
@@ -246,7 +205,26 @@ def mark_task_completed(user_id, service, task_id, reward):
         conn.execute("UPDATE users SET tasks_completed = tasks_completed + 1 WHERE user_id = ?", (user_id,))
         conn.commit()
 
-# ================== ПРОМОКОДЫ ==================
+# ================= ФУНКЦИИ СТАТИСТИКИ =================
+def get_stats():
+    with get_conn() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        today = conn.execute("SELECT COUNT(*) FROM users WHERE registered_at LIKE ?", (str(date.today()) + "%",)).fetchone()[0]
+        total_balance = conn.execute("SELECT COALESCE(SUM(balance),0) FROM users").fetchone()[0]
+        pending = conn.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'").fetchone()[0]
+        done = conn.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'completed'").fetchone()[0]
+        total_stars = conn.execute("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status = 'completed'").fetchone()[0]
+        return {"total": total, "today": today, "total_balance": total_balance, "pending": pending, "done": done, "total_stars": total_stars}
+
+def get_top_balance(limit=10):
+    with get_conn() as conn:
+        return conn.execute("SELECT user_id, username, balance FROM users ORDER BY balance DESC LIMIT ?", (limit,)).fetchall()
+
+def get_top_refs(limit=10):
+    with get_conn() as conn:
+        return conn.execute("""SELECT u.user_id, u.username, COUNT(r.id) as refs FROM users u LEFT JOIN referrals r ON r.referrer_id = u.user_id AND r.status = 'confirmed' GROUP BY u.user_id HAVING refs > 0 ORDER BY refs DESC LIMIT ?""", (limit,)).fetchall()
+
+# ================= ФУНКЦИИ ПРОМОКОДОВ =================
 def create_promo(code, amount, max_uses, is_op=0, op_service=None, op_count=0):
     with get_conn() as conn:
         conn.execute("INSERT OR REPLACE INTO promos (code, amount, max_uses, used, active, is_op, op_service, op_count) VALUES (?, ?, ?, 0, 1, ?, ?, ?)", (code.upper(), amount, max_uses, is_op, op_service, op_count))
@@ -259,40 +237,61 @@ def get_promo(code):
 def activate_promo(code, user_id):
     code = code.upper()
     promo = get_promo(code)
-    if not promo: return False, "❌ Такого промокода нет.", None
-    if not promo['active']: return False, "❌ Промокод деактивирован.", None
-    if promo['used'] >= promo['max_uses']: return False, "❌ Лимит активаций исчерпан.", None
+    if not promo: return False, "❌ Такого промокода нет."
+    if not promo['active']: return False, "❌ Промокод деактивирован."
+    if promo['used'] >= promo['max_uses']: return False, "❌ Лимит активаций исчерпан."
     with get_conn() as conn:
         if conn.execute("SELECT 1 FROM promo_uses WHERE code = ? AND user_id = ?", (code, user_id)).fetchone():
-            return False, "❌ Вы уже активировали этот код.", None
+            return False, "❌ Вы уже активировали этот код."
         conn.execute("INSERT INTO promo_uses (code, user_id, used_at) VALUES (?, ?, ?)", (code, user_id, datetime.now().isoformat()))
         conn.execute("UPDATE promos SET used = used + 1 WHERE code = ?", (code,))
         conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?", (promo['amount'], promo['amount'], user_id))
         conn.commit()
-    return True, f"✅ Промокод активирован! +{promo['amount']} ⭐", promo
+    return True, f"✅ Промокод активирован! +{promo['amount']} ⭐"
 
-# ================== СТАТИСТИКА ==================
-def get_stats():
+def get_all_promos():
     with get_conn() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        today = conn.execute("SELECT COUNT(*) FROM users WHERE registered_at LIKE ?", (str(date.today()) + "%",)).fetchone()[0]
-        total_balance = conn.execute("SELECT COALESCE(SUM(balance),0) FROM users").fetchone()[0]
-        pending = conn.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'").fetchone()[0]
-        done = conn.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'completed'").fetchone()[0]
-        total_stars = conn.execute("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status = 'completed'").fetchone()[0]
-        return {"total": total, "today": today, "total_balance": total_balance, "pending": pending, "done": done, "total_stars": total_stars}
+        return conn.execute("SELECT * FROM promos ORDER BY used DESC").fetchall()
 
-# ================== РЕКЛАМА ==================
-def add_ad_source(code, owner_id, price):
+# ================= ФУНКЦИИ РЕКЛАМЫ =================
+def add_ad_source(code, owner_id, price=0):
     with get_conn() as conn:
-        conn.execute("INSERT OR REPLACE INTO ad_sources (code, owner_id, price, created_at, clicks) VALUES (?, ?, ?, ?, 0)", (code.lower(), owner_id, price, datetime.now().isoformat()))
+        conn.execute("INSERT OR REPLACE INTO ad_sources (code, owner_id, created_at, price) VALUES (?, ?, ?, ?)", (code.lower(), owner_id, datetime.now().isoformat(), price))
         conn.commit()
 
 def get_ad_source(code):
     with get_conn() as conn:
         return conn.execute("SELECT * FROM ad_sources WHERE code = ?", (code.lower(),)).fetchone()
 
-def increment_ad_click(code):
+def track_ad_click(code):
     with get_conn() as conn:
         conn.execute("UPDATE ad_sources SET clicks = clicks + 1 WHERE code = ?", (code.lower(),))
+        conn.commit()
+
+def get_all_ads():
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM ad_sources ORDER BY clicks DESC").fetchall()
+
+# ================= ФУНКЦИИ ИНТЕГРАЦИЙ =================
+def get_integration(name):
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM integrations WHERE name = ?", (name,)).fetchone()
+
+def get_all_integrations():
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM integrations").fetchall()
+
+def toggle_integration(name, status):
+    with get_conn() as conn:
+        conn.execute("UPDATE integrations SET status = ? WHERE name = ?", (status, name))
+        conn.commit()
+
+def set_integration_role(name, role):
+    with get_conn() as conn:
+        conn.execute("UPDATE integrations SET role = ? WHERE name = ?", (role, name))
+        conn.commit()
+
+def update_integration_key(name, key):
+    with get_conn() as conn:
+        conn.execute("UPDATE integrations SET api_key = ? WHERE name = ?", (key, name))
         conn.commit()

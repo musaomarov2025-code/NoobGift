@@ -12,7 +12,6 @@ def init_db():
     with get_conn() as conn:
         cur = conn.cursor()
         
-        # ================= СОЗДАНИЕ ТАБЛИЦ =================
         cur.execute("""CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, 
             username TEXT, 
@@ -32,7 +31,6 @@ def init_db():
         cur.execute("""CREATE TABLE IF NOT EXISTS promos (code TEXT PRIMARY KEY, amount REAL, max_uses INTEGER, used INTEGER DEFAULT 0, active INTEGER DEFAULT 1)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS promo_uses (code TEXT, user_id INTEGER, used_at TEXT, PRIMARY KEY (code, user_id))""")
         
-        # Таблицы заданий
         cur.execute("""CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
             user_id INTEGER, 
@@ -54,8 +52,6 @@ def init_db():
         
         cur.execute("""CREATE TABLE IF NOT EXISTS ad_sources (code TEXT PRIMARY KEY, owner_id INTEGER, created_at TEXT, clicks INTEGER DEFAULT 0)""")
 
-        # ================= АВТОПРАВКА КОЛОНОК (ДЛЯ СТАРЫХ БАЗ) =================
-        # Юзеры
         cur.execute("PRAGMA table_info(users)")
         cols_users = {r[1] for r in cur.fetchall()}
         if "total_earned" not in cols_users: cur.execute("ALTER TABLE users ADD COLUMN total_earned REAL DEFAULT 0.0")
@@ -64,19 +60,16 @@ def init_db():
         if "welcome_bonus_paid" not in cols_users: cur.execute("ALTER TABLE users ADD COLUMN welcome_bonus_paid INTEGER DEFAULT 0")
         if "registered_at" not in cols_users: cur.execute("ALTER TABLE users ADD COLUMN registered_at TEXT")
 
-        # Задания (вот здесь та самая ошибка, которую мы фиксим)
         cur.execute("PRAGMA table_info(tasks)")
         cols_tasks = {r[1] for r in cur.fetchall()}
         if "created_at" not in cols_tasks: 
             cur.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
 
-        # ================= НАСТРОЙКИ =================
         for k, v in DEFAULTS.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
             
         conn.commit()
 
-# ================== НАСТРОЙКИ ==================
 def get_setting(key):
     with get_conn() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -87,7 +80,6 @@ def set_setting(key, value):
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
         conn.commit()
 
-# ================== ЮЗЕРЫ ==================
 def get_user(user_id):
     with get_conn() as conn:
         return conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
@@ -124,7 +116,6 @@ def mark_welcome_bonus_paid(user_id):
         conn.execute("UPDATE users SET welcome_bonus_paid = 1 WHERE user_id = ?", (user_id,))
         conn.commit()
 
-# ================== РЕФЕРАЛЫ ==================
 def create_pending_referral(user_id, referrer_id):
     with get_conn() as conn:
         conn.execute("INSERT INTO referrals (user_id, referrer_id, created_at, status) VALUES (?, ?, ?, 'pending')", (user_id, referrer_id, datetime.now().isoformat()))
@@ -152,7 +143,6 @@ def get_user_referrals(referrer_id):
     with get_conn() as conn:
         return conn.execute("SELECT r.user_id, u.username, r.created_at, r.status FROM referrals r LEFT JOIN users u ON u.user_id = r.user_id WHERE r.referrer_id = ? ORDER BY r.created_at DESC", (referrer_id,)).fetchall()
 
-# ================== ВЫВОД ==================
 def create_withdrawal(user_id, amount):
     with get_conn() as conn:
         cur = conn.cursor()
@@ -175,7 +165,6 @@ def set_withdrawal_status(wid, status):
         conn.execute("UPDATE withdrawals SET status = ? WHERE id = ?", (status, wid))
         conn.commit()
 
-# ================== ЗАДАНИЯ ==================
 def save_task(user_id, service, task_id, link):
     with get_conn() as conn:
         conn.execute("INSERT INTO tasks (user_id, service, task_id, link, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)", (user_id, service, task_id, link, datetime.now().isoformat()))
@@ -200,11 +189,10 @@ def mark_task_completed(user_id, service, task_id, reward):
         conn.execute("UPDATE users SET tasks_completed = tasks_completed + 1 WHERE user_id = ?", (user_id,))
         conn.commit()
 
-# ================== СТАТИСТИКА ==================
 def get_stats():
-""    with get_conn() as conn:
-        total", = conn.execute("SELECT COUNT(*) ( FROM users").fetchone()[0]
-       limit today = conn.execute("SELECT COUNT(*), FROM users WHERE registered_at LIKE ?",)). (str(date.today()) + "%",)).fetchone()[0]
+    with get_conn() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        today = conn.execute("SELECT COUNT(*) FROM users WHERE registered_at LIKE ?", (str(date.today()) + "%",)).fetchone()[0]
         total_balance = conn.execute("SELECT COALESCE(SUM(balance),0) FROM users").fetchone()[0]
         pending = conn.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'").fetchone()[0]
         done = conn.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'completed'").fetchone()[0]
@@ -217,9 +205,8 @@ def get_top_balance(limit=10):
 
 def get_top_refs(limit=10):
     with get_conn() as conn:
-        return conn.execute("""SELECT u.user_id, u.username, COUNT(r.id) as refs FROM users u LEFT JOIN referrals r ON r.referrer_id = u.user_id AND r.status = 'confirmed' GROUP BY u.user_id HAVING refs > 0 ORDER BY refs DESC LIMIT ?fetchall()
+        return conn.execute("""SELECT u.user_id, u.username, COUNT(r.id) as refs FROM users u LEFT JOIN referrals r ON r.referrer_id = u.user_id AND r.status = 'confirmed' GROUP BY u.user_id HAVING refs > 0 ORDER BY refs DESC LIMIT ?""", (limit,)).fetchall()
 
-# ================== ПРОМОКОДЫ ==================
 def create_promo(code, amount, max_uses):
     with get_conn() as conn:
         conn.execute("INSERT OR REPLACE INTO promos (code, amount, max_uses, used, active) VALUES (?, ?, ?, 0, 1)", (code.upper(), amount, max_uses))

@@ -52,22 +52,7 @@ class AdminStates(StatesGroup):
     w_set_val = State()
     w_priv_btn_text = State(); w_priv_btn_url = State(); w_priv_btn_color = State()
 
-# ================== API СЕРВИСОВ ==================
-async def get_bh_tasks(uid):
-    token = db.get_integration('botohub')['api_key'] or BOTOHUB_TOKEN
-    headers = {"Auth": token, "Content-Type": "application/json"}
-    try: count = int(db.get_setting("botohub_entry_count") or 3)
-    except: count = 3
-    payload = {"chat_id": uid, "max_op": count}
-    async with aiohttp.ClientSession() as s:
-        try:
-            async with s.post(BOTOHUB_URL, json=payload, headers=headers, timeout=10) as r:
-                if r.status == 200:
-                    d = await r.json()
-                    return [t for t in d.get("tasks", []) if not t.get("completed") and t.get("url")]
-        except: pass
-    return []
-
+# ================== API: PIARFLOW ==================
 async def pf_get(uid):
     token = db.get_integration('piarflow')['api_key'] or PIARFLOW_TOKEN
     headers = {"Authorization": f"Bearer {token}"}
@@ -75,13 +60,12 @@ async def pf_get(uid):
     async with aiohttp.ClientSession() as s:
         try:
             async with s.post(f"{PIARFLOW_URL}/sponsors", json=payload, headers=headers, timeout=10) as r:
-                d = await r.json()
                 if r.status == 200:
+                    d = await r.json()
                     sp = d.get("sponsors", [])
-                    if sp: return {"srv": "piarflow", "tid": sp[0]["link"], "link": sp[0]["link"]}
-                    else: print(f"DEBUG PiarFlow: Нет доступных спонсоров. Ответ: {d}")
-                else: print(f"DEBUG PiarFlow ОШИБКА: Статус {r.status}, Ответ: {d}")
-        except Exception as e: print(f"DEBUG PiarFlow EXCEPTION: {e}")
+                    if sp and sp[0].get("status") == "unsubscribed": # Проверка статуса
+                        return {"srv": "piarflow", "tid": sp[0]["link"], "link": sp[0]["link"]}
+        except: pass
     return None
 
 async def pf_check(uid, tid):
@@ -95,18 +79,21 @@ async def pf_check(uid, tid):
                 return d.get("sponsors", [{}])[0].get("status") in ["subscribed", "not_counted"]
     return False
 
+# ================== API: TGRASS ==================
 async def tg_get(uid):
-    token = db.get_integration('tgrass')['api_key'] or TGRASS_TOKEN  # <--- Вот тут исправлено
+    token = db.get_integration('tgrass')['api_key'] or TGRASS_TOKEN
     headers = {"Auth": token}
     payload = {"tg_user_id": uid, "is_premium": False, "lang": "ru"}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post(TGRASS_URL, json=payload, headers=headers, timeout=10) as r:
+            async with s.post("https://tgrass.space/tasks", json=payload, headers=headers, timeout=10) as r: # Используем /tasks
                 if r.status == 200:
                     d = await r.json()
-                    off = d.get("offers", [])
-                    if off and d.get("status") == "not_ok":
-                        return {"srv": "tgrass", "tid": str(off[0]["offer_id"]), "link": off[0]["link"]}
+                    # Ищем статус not_ok и наличие офферов
+                    if d.get("status") == "not_ok" and d.get("offers"):
+                        for offer in d["offers"]:
+                            if not offer.get("subscribed"): # Берем только неподписанные
+                                return {"srv": "tgrass", "tid": str(offer["offer_id"]), "link": offer["link"]}
         except: pass
     return None
 
@@ -118,20 +105,21 @@ async def tg_check(uid, tid):
         async with s.post("https://tgrass.space/check", json=payload, headers=headers) as r:
             if r.status == 200:
                 d = await r.json()
-                return d.get("status") == "subscribed"
+                return d.get("status") == "ok" # Проверка статуса
     return False
 
+# ================== API: TRAFSLY ==================
 async def tr_get(uid):
     token = db.get_integration('trafsly')['api_key'] or TRAFSLY_TOKEN
     headers = {"Auth": token}
     payload = {"user_id": uid}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post(TRAFSLY_URL, json=payload, headers=headers, timeout=10) as r:
+            async with s.post("https://api.trafsly.com/api/v1/get-sponsors", json=payload, headers=headers, timeout=10) as r:
                 if r.status == 200:
                     d = await r.json()
                     sp = d.get("sponsors", [])
-                    if sp and d.get("status") == "warning":
+                    if sp and d.get("status") == "warning": # Проверка статуса
                         return {"srv": "trafsly", "tid": str(sp[0]["ads_id"]), "link": sp[0]["link"]}
         except: pass
     return None
@@ -144,30 +132,118 @@ async def tr_check(uid, tid):
         async with s.post("https://api.trafsly.com/api/v1/confirm-subscription", json=payload, headers=headers) as r:
             if r.status == 200:
                 d = await r.json()
-                return d.get("subscribed") is True
+                return d.get("subscribed") is True # Проверка поля
     return False
 
+# ================== API: SUBGRAM ==================
+async def sg_get(uid):
+    token = db.get_integration('subgram')['api_key']
+    if not token: return None
+    headers = {"Auth": token}
+    payload = {"user_id": uid, "chat_id": uid, "max_sponsors": 1, "get_links": 1} # get_links=1 чтобы получить ссылки
+    async with aiohttp.ClientSession() as s:
+        try:
+            async with s.post("https://api.subgram.org/get-sponsors", json=payload, headers=headers, timeout=10) as r:
+                if r.status == 200:
+                    d = await r.json()
+                    if d.get("status") == "warning" and d.get("sponsors"):
+                        sp = d["sponsors"][0]
+                        return {"srv": "subgram", "tid": sp["resource_id"], "link": sp["link"]}
+        except: pass
+    return None
+
+async def sg_check(uid, tid):
+    # Subgram не имеет отдельного метода проверки, статус приходит в get-sponsors
+    # Поэтому мы просто запрашиваем снова и смотрим, пропал ли этот спонсор
+    token = db.get_integration('subgram')['api_key']
+    if not token: return False
+    headers = {"Auth": token}
+    payload = {"user_id": uid, "chat_id": uid, "max_sponsors": 10, "get_links": 1}
+    async with aiohttp.ClientSession() as s:
+        try:
+            async with s.post("https://api.subgram.org/get-sponsors", json=payload, headers=headers, timeout=10) as r:
+                if r.status == 200:
+                    d = await r.json()
+                    if d.get("status") == "ok": return True # Если статус ok, значит подписался на все
+                    for sp in d.get("sponsors", []):
+                        if str(sp["resource_id"]) == str(tid): return False # Если наш спонсор все еще в списке - не подписан
+                    return True # Если нашего спонсора нет в списке, значит подписался
+        except: pass
+    return False
+
+# ================== API: FLYER ==================
+async def fl_get(uid):
+    token = db.get_integration('flyer')['api_key']
+    if not token: return None
+    headers = {"Content-Type": "application/json"}
+    payload = {"key": token, "user_id": uid}
+    async with aiohttp.ClientSession() as s:
+        try:
+            async with s.post("https://api.flyerhubs.com/get_tasks", json=payload, headers=headers, timeout=10) as r:
+                if r.status == 200:
+                    d = await r.json()
+                    tasks = d.get("tasks", [])
+                    if tasks:
+                        t = tasks[0]
+                        return {"srv": "flyer", "tid": t["signature"], "link": t["link"]}
+        except: pass
+    return None
+
+async def fl_check(uid, tid):
+    token = db.get_integration('flyer')['api_key']
+    if not token: return False
+    headers = {"Content-Type": "application/json"}
+    payload = {"key": token, "user_id": uid, "signature": tid}
+    async with aiohttp.ClientSession() as s:
+        try:
+            async with s.post("https://api.flyerhubs.com/check_task", json=payload, headers=headers, timeout=10) as r:
+                if r.status == 200:
+                    d = await r.json()
+                    return d.get("status") == "completed" # Проверка статуса
+        except: pass
+    return False
+
+# ================== УНИВЕРСАЛЬНЫЙ ПОЛУЧАТЕЛЬ ==================
 async def get_new_task(uid):
     conn = db.get_conn()
     srv = conn.execute("SELECT name FROM integrations WHERE status = 'on' AND role = 'tasks'").fetchall()
     srv_names = [s['name'] for s in srv]
     conn.close()
     
+    # Пробуем по очереди каждый включенный сервис
     if "piarflow" in srv_names:
-        t = await pf_get(uid)
-        if t: return t
+        try:
+            t = await pf_get(uid)
+            if t: return t
+        except: pass
     if "tgrass" in srv_names:
-        t = await tg_get(uid)
-        if t: return t
+        try:
+            t = await tg_get(uid)
+            if t: return t
+        except: pass
     if "trafsly" in srv_names:
-        t = await tr_get(uid)
-        if t: return t
+        try:
+            t = await tr_get(uid)
+            if t: return t
+        except: pass
+    if "subgram" in srv_names:
+        try:
+            t = await sg_get(uid)
+            if t: return t
+        except: pass
+    if "flyer" in srv_names:
+        try:
+            t = await fl_get(uid)
+            if t: return t
+        except: pass
     return None
 
 async def check_task_status(srv, uid, tid):
     if srv == "piarflow": return await pf_check(uid, tid)
     if srv == "tgrass": return await tg_check(uid, tid)
     if srv == "trafsly": return await tr_check(uid, tid)
+    if srv == "subgram": return await sg_check(uid, tid)
+    if srv == "flyer": return await fl_check(uid, tid)
     return False
 
 # ================== СТАРТ И ОП ==================

@@ -37,6 +37,16 @@ def back_kb(target="menu_back"):
     ))
     return builder.as_markup()
 
+def notify_task_kb():
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text="Открыть задания",
+        callback_data="menu_earn",
+        style="primary",
+        icon_custom_emoji_id="5472033358693280429"
+    ))
+    return builder.as_markup()
+
 # ==========================================
 # ОП (BOTOHUB) И ЗАДАНИЯ
 # ==========================================
@@ -116,6 +126,7 @@ def admin_kb():
          InlineKeyboardButton(text="🎟 Промокоды", callback_data="promos")],
         [InlineKeyboardButton(text="📊 Реклама", callback_data="ad_menu"),
          InlineKeyboardButton(text="💸 Начислить", callback_data="give_start")],
+        [InlineKeyboardButton(text="🔔 Уведомления", callback_data="admin_notify")], # НОВАЯ КНОПКА
         [InlineKeyboardButton(text="👥 Юзер", callback_data="user_find"),
          InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")],
         [InlineKeyboardButton(text="📦 Бэкап", callback_data="backup_help")],
@@ -128,12 +139,6 @@ def user_action_kb(uid: int, is_banned: int):
     builder.row(InlineKeyboardButton(text="💰 Изменить баланс", callback_data=f"u_bal:{uid}"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back", icon_custom_emoji_id="5346230992044574063"))
     return builder.as_markup()
-
-def admin_wd_kb(wid):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"wd_ok:{wid}"),
-         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"wd_no:{wid}")]
-    ])
 
 def wd_page_kb(wid, idx, total):
     nav_row = []
@@ -162,20 +167,21 @@ def bh_kb(enabled):
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-def tasks_kb(enabled):
-    status = "🔴 Выключить" if enabled else "🟢 Включить"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 Награда за задание", callback_data="tasks_edit_reward")],
-        [InlineKeyboardButton(text=status, callback_data="tasks_toggle")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
-    ])
-
 def promos_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Создать промокод", callback_data="promo_create")],
         [InlineKeyboardButton(text="📜 Список промокодов", callback_data="promo_list")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
+
+def promo_srv_kb(selected_services):
+    builder = InlineKeyboardBuilder()
+    services = ['botohub', 'piarflow', 'tgrass', 'trafsly', 'subgram', 'flyer']
+    for srv in services:
+        status = "✅ " if srv in selected_services else "❌ "
+        builder.row(InlineKeyboardButton(text=f"{status}{srv.upper()}", callback_data=f"psrv:{srv}"))
+    builder.row(InlineKeyboardButton(text="Готово ➡️", callback_data="psrv_done", style="success"))
+    return builder.as_markup()
 
 def ad_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -187,7 +193,7 @@ def ad_menu_kb():
 def settings_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Бонус за реферала", callback_data="set:ref_bonus")],
-        [InlineKeyboardButton(text="🎁 Ежедневный бонус", callback_data="set:daily_bonus")],
+        [InlineKeyboardButton(text="🎯 Бонус за задание", callback_data="set:task_reward")], # ИЗМЕНЕНО ТУТ
         [InlineKeyboardButton(text="👥 Друзей для вывода", callback_data="set:withdraw_friends_required")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])

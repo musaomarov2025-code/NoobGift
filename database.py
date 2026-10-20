@@ -56,6 +56,7 @@ def init_db():
         if "welcome_bonus_paid" not in cols: cur.execute("ALTER TABLE users ADD COLUMN welcome_bonus_paid INTEGER DEFAULT 0")
         if "registered_at" not in cols: cur.execute("ALTER TABLE users ADD COLUMN registered_at TEXT")
         if "ad_code" not in cols: cur.execute("ALTER TABLE users ADD COLUMN ad_code TEXT DEFAULT NULL")
+        if "is_banned" not in cols: cur.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
 
         cur.execute("PRAGMA table_info(ad_sources)")
         cols_ads = {r[1] for r in cur.fetchall()}

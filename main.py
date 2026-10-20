@@ -354,7 +354,6 @@ async def back_to_menu(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 # ================== ЗАДАНИЯ ==================
-# ================== ЗАДАНИЯ ==================
 @dp.callback_query(F.data == "menu_earn")
 async def show_tasks(call: CallbackQuery):
     try: await call.message.delete()

@@ -285,34 +285,54 @@ async def show_tasks(call: CallbackQuery):
     await call.answer()
 
 async def send_next_task(message: Message, uid: int):
-    task = db.get_pending_task(uid)
-    if not task:
-        new_t = await get_new_task(uid)
-        if not new_t:
-            return await message.answer("😔 На данный момент нет доступных заданий.", reply_markup=kb.back_kb())
-        db.save_task(uid, new_t["srv"], new_t["tid"], new_t["link"])
+    try:
         task = db.get_pending_task(uid)
-    t = db.get_setting("task_text").format(reward=db.get_setting("task_reward"))
-    await message.answer(t, reply_markup=kb.task_kb(task["link"]))
+        if not task:
+            new_t = await get_new_task(uid)
+            if not new_t:
+                return await message.answer("😔 На данный момент нет доступных заданий.", reply_markup=kb.back_kb())
+            
+            link = new_t.get("link")
+            if not link or not str(link).startswith("http"):
+                print(f"⚠️ ОШИБКА API: Сервис {new_t.get('srv')} вернул битую ссылку: {link}")
+                return await message.answer("😔 Ошибка на стороне сервиса заданий. Попробуйте позже.", reply_markup=kb.back_kb())
+
+            db.save_task(uid, new_t["srv"], new_t["tid"], link)
+            task = db.get_pending_task(uid)
+            
+        t = db.get_setting("task_text").format(reward=db.get_setting("task_reward"))
+        await message.answer(t, reply_markup=kb.task_kb(task["link"]))
+    except Exception as e:
+        print(f"🚨 ОШИБКА ОТПРАВКИ ЗАДАНИЯ: {e}")
+        await message.answer("😔 Произошла ошибка при загрузке задания.", reply_markup=kb.back_kb())
 
 @dp.callback_query(F.data == "check_task")
 async def check_task_cb(call: CallbackQuery):
     uid = call.from_user.id
     task = db.get_pending_task(uid)
     if not task: return await call.answer("Задание не найдено.", show_alert=True)
-    await call.message.edit_text("⏳ Проверяем...")
+    
+    try: await call.message.edit_text("⏳ Проверяем...")
+    except: pass
+    
     is_done = await check_task_status(task['service'], uid, task['task_id'])
+    
     if is_done:
         reward = float(db.get_setting("task_reward"))
         db.add_balance(uid, reward)
         db.mark_task_completed(uid, task['service'], task['task_id'], reward)
         db.mark_task_status(task['id'], 'done')
-        await call.message.edit_text(f"✅ Выполнено! Начислено: {fmt(reward)} ⭐")
+        try: await call.message.edit_text(f"✅ Выполнено! Начислено: {fmt(reward)} ⭐")
+        except: pass
         await asyncio.sleep(1.5)
         try: await call.message.delete()
         except: pass
         await send_next_task(call.message, uid)
-    else: await call.message.edit_text("❌ Не выполнено.", reply_markup=kb.task_kb(task["link"]))
+    else: 
+        try:
+            await call.message.edit_text("❌ Не выполнено.", reply_markup=kb.task_kb(task["link"]))
+        except Exception as e:
+            await call.answer("❌ Не выполнено.", show_alert=True)
     await call.answer()
 
 @dp.callback_query(F.data == "skip_task")
@@ -323,8 +343,8 @@ async def skip_task_cb(call: CallbackQuery):
     try: await call.message.delete()
     except: pass
     await send_next_task(call.message, call.from_user.id)
-
-# ================== ПРОФИЛЬ, РЕФЕРАЛЫ, СТАТИСТИКА ==================
+    
+    # ================== ПРОФИЛЬ, РЕФЕРАЛЫ, СТАТИСТИКА ==================
 @dp.callback_query(F.data == "menu_profile")
 async def menu_profile(call: CallbackQuery):
     try: await call.message.delete()

@@ -904,3 +904,103 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    # ================== ЗАПЛАТКА: НЕДОСТАЮЩИЕ ОБРАБОТЧИКИ АДМИНКИ ==================
+
+# 1. Админская статистика (детальная)
+@dp.callback_query(F.data == "stats")
+async def admin_detailed_stats(c: CallbackQuery):
+    if c.from_user.id != ADMIN_ID: return
+    s = db.get_stats()
+    txt = (
+        f"📊 <b>Статистика бота</b>\n\n"
+        f"👥 Всего юзеров: <b>{s['total']}</b>\n"
+        f"🆕 За сегодня: <b>{s['today']}</b>\n"
+        f"💰 Общий баланс: <b>{fmt(s['total_balance'])}</b> ⭐\n\n"
+        f"📥 Заявок в ожидании: <b>{s['pending']}</b>\n"
+        f"✅ Всего выведено: <b>{s['done']}</b> заявок\n"
+        f"💸 Сумма выводов: <b>{fmt(s['total_stars'])}</b> ⭐"
+    )
+    await c.message.edit_text(txt, reply_markup=kb.back_admin_kb())
+    await c.answer()
+
+# 2. Приватка
+@dp.callback_query(F.data == "priv_menu")
+async def admin_priv(c: CallbackQuery):
+    if c.from_user.id != ADMIN_ID: return
+    status = "🟢 Включена" if db.get_setting("priv_enabled") == "1" else "🔴 Выключена"
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="🔴 Выкл" if db.get_setting("priv_enabled") == "1" else "🟢 Вкл", callback_data="priv_toggle"))
+    b.row(InlineKeyboardButton(text="✏️ Изменить текст", callback_data="priv_edit_text"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
+    await c.message.edit_text(f"🎛 <b>Приватка</b>\n\nСтатус: {status}\n\nТекст:\n{db.get_setting('priv_text') or '—'}", reply_markup=b.as_markup())
+
+@dp.callback_query(F.data == "priv_toggle")
+async def priv_toggle(c: CallbackQuery):
+    cur = db.get_setting("priv_enabled")
+    db.set_setting("priv_enabled", "0" if cur == "1" else "1")
+    await admin_priv(c)
+
+@dp.callback_query(F.data == "priv_edit_text")
+async def priv_edit(c: CallbackQuery, state: FSMContext):
+    await c.message.edit_text("Отправь новый текст приватки (HTML):", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_set_val)
+    await state.update_data(set_key="priv_text")
+
+# 3. Спонсоры (ОП Botohub) - быстрый переход
+@dp.callback_query(F.data == "bh_menu")
+async def admin_bh(c: CallbackQuery):
+    if c.from_user.id != ADMIN_ID: return
+    en = db.get_setting("botohub_enabled") == "1"
+    await c.message.edit_text(
+        f"🎯 <b>ОП (Botohub)</b>\n\n"
+        f"Статус: {'🟢 Вкл' if en else '🔴 Выкл'}\n"
+        f"Кол-во на входе: <b>{db.get_setting('botohub_entry_count')}</b>\n\n"
+        f"<i>Все ключи и вкл/выкл настраиваются в разделе «Задания (Сервисы)».</i>",
+        reply_markup=kb.bh_kb(en)
+    )
+
+@dp.callback_query(F.data == "bh_toggle")
+async def bh_toggle(c: CallbackQuery):
+    cur = db.get_setting("botohub_enabled")
+    db.set_setting("botohub_enabled", "0" if cur == "1" else "1")
+    await admin_bh(c)
+
+@dp.callback_query(F.data == "bh_edit_text")
+async def bh_edit_text(c: CallbackQuery, state: FSMContext):
+    await c.message.edit_text("Отправь новый текст для ОП:", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_set_val)
+    await state.update_data(set_key="botohub_text")
+
+@dp.callback_query(F.data == "bh_edit_entry")
+async def bh_edit_entry(c: CallbackQuery, state: FSMContext):
+    await c.message.edit_text("Сколько каналов показывать при входе?", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_set_val)
+    await state.update_data(set_key="botohub_entry_count")
+
+# 4. Быстрое начисление баланса
+@dp.callback_query(F.data == "give_start")
+async def give_start(c: CallbackQuery, state: FSMContext):
+    if c.from_user.id != ADMIN_ID: return
+    await c.message.edit_text("Введи ID юзера для начисления:", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_u_bal)  # Используем существующее состояние
+    await state.update_data(bal_uid=None, give_mode=True)
+
+# Переопределяем обработчик ввода (если give_mode=True)
+@dp.message(AdminStates.w_u_bal)
+async def save_bal_or_give(message: Message, state: FSMContext):
+    d = await state.get_data()
+    if d.get('give_mode') and d.get('bal_uid') is None:
+        try:
+            uid = int(message.text.strip())
+            u = db.get_user(uid)
+            if not u: return await message.answer("❌ Юзер не найден.")
+            await state.update_data(bal_uid=uid)
+            await message.answer(f"Юзер: @{u['username'] or 'id'+str(uid)}\nВведи сумму начисления:")
+        except: await message.answer("Ошибка. Введи числовой ID.")
+    else:
+        try:
+            a = float(message.text)
+            db.add_balance(d['bal_uid'], a)
+            await message.answer("✅ Баланс изменен!", reply_markup=kb.back_admin_kb())
+            await state.clear()
+        except: await message.answer("Ошибка. Введи число.")

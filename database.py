@@ -12,13 +12,13 @@ def init_db():
     with get_conn() as conn:
         cur = conn.cursor()
         
-        # 1. Юзеры (добавлена колонка ad_code для рекламы)
+        # 1. Юзеры
         cur.execute("""CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0, 
             total_earned REAL DEFAULT 0.0, tasks_completed INTEGER DEFAULT 0,
             last_bonus TEXT, referrer_id INTEGER, registered_at TEXT, 
             passed_op INTEGER DEFAULT 0, welcome_bonus_paid INTEGER DEFAULT 0,
-            ad_code TEXT DEFAULT NULL
+            ad_code TEXT DEFAULT NULL, is_banned INTEGER DEFAULT 0
         )""")
         
         # 2. Рефералы
@@ -30,7 +30,7 @@ def init_db():
         # 4. Настройки
         cur.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
         
-        # 5. Промокоды (добавлены поля для ОП: is_op, op_service, op_count)
+        # 5. Промокоды
         cur.execute("""CREATE TABLE IF NOT EXISTS promos (code TEXT PRIMARY KEY, amount REAL, max_uses INTEGER, used INTEGER DEFAULT 0, active INTEGER DEFAULT 1, is_op INTEGER DEFAULT 0, op_service TEXT, op_count INTEGER DEFAULT 0)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS promo_uses (code TEXT, user_id INTEGER, used_at TEXT, PRIMARY KEY (code, user_id))""")
         
@@ -38,11 +38,13 @@ def init_db():
         cur.execute("""CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, service TEXT, task_id TEXT, link TEXT, status TEXT DEFAULT 'pending', created_at TEXT)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS task_completed (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, service TEXT, task_id TEXT, reward REAL, done_at TEXT)""")
         
-        # 7. Реклама (добавлена колонка price)
+        # 7. Реклама
         cur.execute("""CREATE TABLE IF NOT EXISTS ad_sources (code TEXT PRIMARY KEY, owner_id INTEGER, created_at TEXT, clicks INTEGER DEFAULT 0, price REAL DEFAULT 0)""")
         
-        # 8. Интеграции (новая таблица для сервисов)
+        # 8. Интеграции
         cur.execute("""CREATE TABLE IF NOT EXISTS integrations (name TEXT PRIMARY KEY, api_key TEXT DEFAULT '', status TEXT DEFAULT 'off', role TEXT DEFAULT 'tasks')""")
+        
+        # Заполняем базовые сервисы
         services = [('botohub', 'op'), ('piarflow', 'tasks'), ('tgrass', 'tasks'), ('trafsly', 'tasks'), ('subgram', 'tasks'), ('flyer', 'tasks')]
         for name, role in services:
             cur.execute("INSERT OR IGNORE INTO integrations (name, role) VALUES (?, ?)", (name, role))
@@ -56,7 +58,7 @@ def init_db():
         if "welcome_bonus_paid" not in cols: cur.execute("ALTER TABLE users ADD COLUMN welcome_bonus_paid INTEGER DEFAULT 0")
         if "registered_at" not in cols: cur.execute("ALTER TABLE users ADD COLUMN registered_at TEXT")
         if "ad_code" not in cols: cur.execute("ALTER TABLE users ADD COLUMN ad_code TEXT DEFAULT NULL")
-        if "is_banned" not in cols: cur.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
+        if "is_banned" not in cols: cur.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0") # <-- Добавлено
 
         cur.execute("PRAGMA table_info(ad_sources)")
         cols_ads = {r[1] for r in cur.fetchall()}
@@ -68,6 +70,7 @@ def init_db():
         if "op_service" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_service TEXT")
         if "op_count" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_count INTEGER DEFAULT 0")
 
+        # Заполняем настройки по умолчанию
         for k, v in DEFAULTS.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
         conn.commit()
@@ -113,11 +116,6 @@ def toggle_ban(user_id, ban_status):
 def add_balance(user_id, amount):
     with get_conn() as conn:
         conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?", (amount, amount, user_id))
-        conn.commit()
-
-def remove_balance(user_id, amount):
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
         conn.commit()
 
 def set_op_passed(user_id):
@@ -190,10 +188,6 @@ def save_task(user_id, service, task_id, link):
 def get_pending_task(user_id):
     with get_conn() as conn:
         return conn.execute("SELECT * FROM tasks WHERE user_id = ? AND status = 'pending' ORDER BY id ASC LIMIT 1", (user_id,)).fetchone()
-
-def get_task_by_link(user_id, link):
-    with get_conn() as conn:
-        return conn.execute("SELECT * FROM tasks WHERE user_id = ? AND link = ?", (user_id, link)).fetchone()
 
 def mark_task_status(task_id, status):
     with get_conn() as conn:

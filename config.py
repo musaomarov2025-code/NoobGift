@@ -90,14 +90,11 @@ DEFAULTS = {
     "priv_enabled": "0",
     "priv_text": "",
     "priv_media": "",
-    "priv_buttons": "",
+    "priv_buttons": "[]",
     
     # НОВЫЕ НАСТРОЙКИ ДЛЯ УВЕДОМЛЕНИЙ
     "notify_enabled": "1",
-    "notify_text": (
-        '<tg-emoji emoji-id="6030563507299160824">🔔</tg-emoji> <b>Появилось новое задание!</b>\n\n'
-        'Открой его и заработай +{reward} <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji>'
-    ),
+    "notify_texts": "[]",
     "notify_interval": "12",
     "last_notify_time": ""
 }

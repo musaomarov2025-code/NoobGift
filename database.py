@@ -74,7 +74,7 @@ def init_db():
         cur.execute("PRAGMA table_info(tasks)")
         cols_tasks = {r[1] for r in cur.fetchall()}
         if "created_at" not in cols_tasks: 
-            cur.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
+        cur.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
             
         # Заполняем настройки по умолчанию, если их нет
         for k, v in DEFAULTS.items():

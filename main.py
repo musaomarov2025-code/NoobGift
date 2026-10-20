@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 import re
 import json
@@ -294,7 +295,7 @@ async def send_next_task(message: Message, uid: int):
             
             link = new_t.get("link")
             if not link or not str(link).startswith("http"):
-                print(f"⚠️ ОШИБКА API: Сервис {new_t.get('srv')} вернул битую ссылку: {link}")
+                logging.error(f"⚠️ ОШИБКА API: Сервис {new_t.get('srv')} вернул битую ссылку: {link}")
                 return await message.answer("😔 Ошибка на стороне сервиса заданий. Попробуйте позже.", reply_markup=kb.back_kb())
 
             db.save_task(uid, new_t["srv"], new_t["tid"], link)
@@ -303,37 +304,8 @@ async def send_next_task(message: Message, uid: int):
         t = db.get_setting("task_text").format(reward=db.get_setting("task_reward"))
         await message.answer(t, reply_markup=kb.task_kb(task["link"]))
     except Exception as e:
-        print(f"🚨 ОШИБКА ОТПРАВКИ ЗАДАНИЯ: {e}")
+        logging.error(f"🚨 ОШИБКА ОТПРАВКИ ЗАДАНИЯ: {e}")  # <-- Теперь ошибка попадет в логи
         await message.answer("😔 Произошла ошибка при загрузке задания.", reply_markup=kb.back_kb())
-
-@dp.callback_query(F.data == "check_task")
-async def check_task_cb(call: CallbackQuery):
-    uid = call.from_user.id
-    task = db.get_pending_task(uid)
-    if not task: return await call.answer("Задание не найдено.", show_alert=True)
-    
-    try: await call.message.edit_text("⏳ Проверяем...")
-    except: pass
-    
-    is_done = await check_task_status(task['service'], uid, task['task_id'])
-    
-    if is_done:
-        reward = float(db.get_setting("task_reward"))
-        db.add_balance(uid, reward)
-        db.mark_task_completed(uid, task['service'], task['task_id'], reward)
-        db.mark_task_status(task['id'], 'done')
-        try: await call.message.edit_text(f"✅ Выполнено! Начислено: {fmt(reward)} ⭐")
-        except: pass
-        await asyncio.sleep(1.5)
-        try: await call.message.delete()
-        except: pass
-        await send_next_task(call.message, uid)
-    else: 
-        try:
-            await call.message.edit_text("❌ Не выполнено.", reply_markup=kb.task_kb(task["link"]))
-        except Exception as e:
-            await call.answer("❌ Не выполнено.", show_alert=True)
-    await call.answer()
 
 @dp.callback_query(F.data == "skip_task")
 async def skip_task_cb(call: CallbackQuery):

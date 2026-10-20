@@ -70,6 +70,12 @@ def init_db():
         if "op_service" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_service TEXT")
         if "op_count" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_count INTEGER DEFAULT 0")
 
+        # Миграция для таблицы tasks (добавляем created_at)
+        cur.execute("PRAGMA table_info(tasks)")
+        cols_tasks = {r[1] for r in cur.fetchall()}
+        if "created_at" not in cols_tasks: 
+            cur.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
+            
         # Заполняем настройки по умолчанию, если их нет
         for k, v in DEFAULTS.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))

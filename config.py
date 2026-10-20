@@ -25,13 +25,11 @@ WITHDRAW_AMOUNTS = [15, 25, 50, 100]
 
 DEFAULTS = {
     "ref_bonus": "11",
-    "daily_bonus": "1",
-    "welcome_bonus": "15",
-    "withdraw_friends_required": "3",
     "task_reward": "0.45",
+    "withdraw_friends_required": "3",
     "welcome_text": "Главное меню 👇",
     "withdraw_video_id": "",
-    "menu_avatar": "", # Сюда вставь ссылку на картинку для меню
+    "menu_avatar": "", # Ссылка на картинку для меню
     
     "botohub_enabled": "1",
     "botohub_entry_count": "2",
@@ -40,10 +38,6 @@ DEFAULTS = {
         '<tg-emoji emoji-id="6026034017608930629">👉</tg-emoji> После подписки нажимай на кнопку '
         '"<tg-emoji emoji-id="6026257381678124710">✅</tg-emoji> Я Подписался"'
     ),
-
-    "piarflow_enabled": "1",
-    "tgrass_enabled": "1",
-    "trafsly_enabled": "1",
 
     "menu_text": (
         '<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> Получи свою личную ссылку — жми «Рефералы»\n\n'
@@ -95,5 +89,15 @@ DEFAULTS = {
     ),
     "priv_enabled": "0",
     "priv_text": "",
-    "priv_buttons": ""
+    "priv_media": "",
+    "priv_buttons": "",
+    
+    # НОВЫЕ НАСТРОЙКИ ДЛЯ УВЕДОМЛЕНИЙ
+    "notify_enabled": "1",
+    "notify_text": (
+        '<tg-emoji emoji-id="6030563507299160824">🔔</tg-emoji> <b>Появилось новое задание!</b>\n\n'
+        'Открой его и заработай +{reward} <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji>'
+    ),
+    "notify_interval": "12",
+    "last_notify_time": ""
 }

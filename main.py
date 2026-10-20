@@ -895,16 +895,7 @@ async def daily_backup_worker():
             print(f"Ошибка бэкапа: {e}")
             await asyncio.sleep(3600)
 
-# ================== ЗАПУСК ==================
-async def main():
-    db.init_db()
-    asyncio.create_task(daily_backup_worker())
-    print("Бот успешно запущен!")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-    # ================== ЗАПЛАТКА: НЕДОСТАЮЩИЕ ОБРАБОТЧИКИ АДМИНКИ ==================
+# ================== ЗАПЛАТКА: НЕДОСТАЮЩИЕ ОБРАБОТЧИКИ АДМИНКИ ==================
 
 # 1. Админская статистика (детальная)
 @dp.callback_query(F.data == "stats")
@@ -1004,3 +995,13 @@ async def save_bal_or_give(message: Message, state: FSMContext):
             await message.answer("✅ Баланс изменен!", reply_markup=kb.back_admin_kb())
             await state.clear()
         except: await message.answer("Ошибка. Введи число.")
+            
+# ================== ЗАПУСК ==================
+async def main():
+    db.init_db()
+    asyncio.create_task(daily_backup_worker())
+    print("Бот успешно запущен!")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())

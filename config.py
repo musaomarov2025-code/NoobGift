@@ -31,6 +31,7 @@ DEFAULTS = {
     "task_reward": "0.45",
     "welcome_text": "Главное меню 👇",
     "withdraw_video_id": "",
+    "menu_avatar": "", # Сюда вставь ссылку на картинку для меню
     
     "botohub_enabled": "1",
     "botohub_entry_count": "2",

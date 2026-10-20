@@ -4,11 +4,10 @@ from datetime import datetime, timedelta
 import aiohttp
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command, StateFilter
-from aiogram.types import Message, CallbackQuery, FSInputFile, InlineMLKeyboardButton
-from aiogram.f))
-sm.state import State, StatesGroup
-dpfrom aiogram.fsm.context = import FSMContext
-from Dis aiogram.enums import ParseModepatcher
+from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardButton
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -20,15 +19,23 @@ from config import (
 import database as db
 import keyboards as kb
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HT()
+# Для работы с картинкой в меню (добавь "menu_avatar": "" в DEFAULTS в config.py)
+if "menu_avatar" not in DEFAULTS:
+    DEFAULTS["menu_avatar"] = ""
 
-# ================== СОСТОЯНИЯ ==================
-class AdminStates(StatesGroup):
-    w_p_sum = State(); w_p_act = State(); w_p_srv = State(); w_p_cnt = State()
-    w_u_search = State(); w_u_bal = State()
-    w_ad_code = State(); w_ad_own = State(); w_ad_prc = State()
-    w_int_key = State()
-    w_bc_text = State(); w_bc_media = State()
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
+
+def _integration_on(name: str, role: str = None) -> bool:
+    try:
+        i = db.get_integration(name)
+        if not i or i['status'] != 'on':
+            return False
+        if role and i['role'] != role:
+            return False
+        return True
+    except Exception:
+        return False
 
 def fmt(amt):
     return f"{amt:.2f}".rstrip('0').rstrip('.') if amt % 1 else f"{amt:.0f}"
@@ -40,9 +47,19 @@ async def send_av(message, text, markup=None):
     else:
         await message.answer(text=text, reply_markup=markup)
 
-# ================== API: BOTOHUB (ОП) ==================
+# ================== СОСТОЯНИЯ ==================
+class AdminStates(StatesGroup):
+    w_p_sum = State(); w_p_act = State(); w_p_srv = State(); w_p_cnt = State()
+    w_u_search = State(); w_u_bal = State()
+    w_ad_code = State(); w_ad_own = State(); w_ad_prc = State()
+    w_int_key = State()
+    w_bc_text = State(); w_bc_media = State(); w_bc_limit = State()
+    w_set_val = State()
+
+# ================== API СЕРВИСОВ ==================
 async def get_bh_tasks(uid):
-    headers = {"Auth": BOTOHUB_TOKEN, "Content-Type": "application/json"}
+    token = db.get_integration('botohub')['api_key'] or BOTOHUB_TOKEN
+    headers = {"Auth": token, "Content-Type": "application/json"}
     try: count = int(db.get_setting("botohub_entry_count") or 3)
     except: count = 3
     payload = {"chat_id": uid, "max_op": count}
@@ -55,9 +72,9 @@ async def get_bh_tasks(uid):
         except: pass
     return []
 
-# ================== API: PIARFLOW ==================
 async def pf_get(uid):
-    headers = {"Authorization": f"Bearer {PIARFLOW_TOKEN}"}
+    token = db.get_integration('piarflow')['api_key'] or PIARFLOW_TOKEN
+    headers = {"Authorization": f"Bearer {token}"}
     payload = {"user_id": uid, "chat_id": uid, "max_sponsors": 1}
     async with aiohttp.ClientSession() as s:
         try:
@@ -70,7 +87,8 @@ async def pf_get(uid):
     return None
 
 async def pf_check(uid, tid):
-    headers = {"Authorization": f"Bearer {PIARFLOW_TOKEN}"}
+    token = db.get_integration('piarflow')['api_key'] or PIARFLOW_TOKEN
+    headers = {"Authorization": f"Bearer {token}"}
     payload = {"user_id": uid, "links": [tid]}
     async with aiohttp.ClientSession() as s:
         async with s.post(f"{PIARFLOW_URL}/sponsors/check", json=payload, headers=headers) as r:
@@ -79,9 +97,9 @@ async def pf_check(uid, tid):
                 return d.get("sponsors", [{}])[0].get("status") in ["subscribed", "not_counted"]
     return False
 
-# ================== API: TGRASS ==================
 async def tg_get(uid):
-    headers = {"Auth": TGRASS_TOKEN}
+    token = db.get_integration('tgrass')['api_key'] or TGRASS_TOKEN
+    headers = {"Auth": token}
     payload = {"tg_user_id": uid, "is_premium": False, "lang": "ru"}
     async with aiohttp.ClientSession() as s:
         try:
@@ -95,7 +113,8 @@ async def tg_get(uid):
     return None
 
 async def tg_check(uid, tid):
-    headers = {"Auth": TGRASS_TOKEN}
+    token = db.get_integration('tgrass')['api_key'] or TGRASS_TOKEN
+    headers = {"Auth": token}
     payload = {"tg_user_id": uid, "offer_id": int(tid)}
     async with aiohttp.ClientSession() as s:
         async with s.post("https://tgrass.space/check", json=payload, headers=headers) as r:
@@ -104,9 +123,9 @@ async def tg_check(uid, tid):
                 return d.get("status") == "subscribed"
     return False
 
-# ================== API: TRAFSLY ==================
 async def tr_get(uid):
-    headers = {"Auth": TRAFSLY_TOKEN}
+    token = db.get_integration('trafsly')['api_key'] or TRAFSLY_TOKEN
+    headers = {"Auth": token}
     payload = {"user_id": uid}
     async with aiohttp.ClientSession() as s:
         try:
@@ -120,7 +139,8 @@ async def tr_get(uid):
     return None
 
 async def tr_check(uid, tid):
-    headers = {"Auth": TRAFSLY_TOKEN}
+    token = db.get_integration('trafsly')['api_key'] or TRAFSLY_TOKEN
+    headers = {"Auth": token}
     payload = {"user_id": uid, "ads_id": tid}
     async with aiohttp.ClientSession() as s:
         async with s.post("https://api.trafsly.com/api/v1/confirm-subscription", json=payload, headers=headers) as r:
@@ -129,11 +149,11 @@ async def tr_check(uid, tid):
                 return d.get("subscribed") is True
     return False
 
-# ================== УНИВЕРСАЛЬНЫЙ ПОЛУЧАТЕЛЬ ЗАДАНИЙ ==================
 async def get_new_task(uid):
-    # Проверяем, какие сервисы включены в БД и стоят на роль "Задания"
-    srv = db.get_conn().execute("SELECT name FROM integrations WHERE status = 'on' AND role = 'tasks'").fetchall()
+    conn = db.get_conn()
+    srv = conn.execute("SELECT name FROM integrations WHERE status = 'on' AND role = 'tasks'").fetchall()
     srv_names = [s['name'] for s in srv]
+    conn.close()
     
     if "piarflow" in srv_names:
         t = await pf_get(uid)
@@ -151,14 +171,27 @@ async def check_task_status(srv, uid, tid):
     if srv == "tgrass": return await tg_check(uid, tid)
     if srv == "trafsly": return await tr_check(uid, tid)
     return False
-    # ================== СТАРТ И ОП ==================
+
+# ================== СТАРТ И ОП ==================
 @dp.message(CommandStart())
 async def start_cmd(message: Message, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
-    args = message.text.split()
-    ref_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
-    if ref_id == uid: ref_id = None
+    args = message.text.split(maxsplit=1)
+    payload = args[1].strip() if len(args) > 1 else None
+
+    ref_id = None
+    promo_code = None
+    ad_code_val = None
+
+    if payload:
+        if payload.startswith("promo_"):
+            promo_code = payload
+        elif payload.startswith("ad_"):
+            ad_code_val = payload[3:]
+        elif payload.isdigit():
+            ref_id = int(payload)
+            if ref_id == uid: ref_id = None
 
     u = db.get_user(uid)
     if u and u['is_banned']: 
@@ -166,44 +199,56 @@ async def start_cmd(message: Message, state: FSMContext):
 
     if db.add_user(uid, message.from_user.username, ref_id):
         if ref_id: db.create_pending_referral(uid, ref_id)
+        if ad_code_val:
+            db.track_ad_click(ad_code_val)
+            db.set_user_ad_code(uid, ad_code_val)
     else:
         db.update_username(uid, message.from_user.username)
 
-    # 1. Приватка
+    if promo_code:
+        ok, msg = db.activate_promo(promo_code, uid)
+        if ok: await message.answer(msg)
+
+    # Приватка
     if db.get_setting("priv_enabled") == "1":
-        await message.answer(db.get_setting("priv_text"))
+        ptxt = db.get_setting("priv_text")
+        await message.answer(ptxt)
         await asyncio.sleep(3)
 
-    # 2. ОП от Botohub
-    op_tasks = await get_bh_tasks(uid)
-    if op_tasks:
-        kb_op = kb.op_screen_kb([(t['url'], "Подписаться", t['url'], False) for t in op_tasks])
-        await message.answer(db.get_setting("botohub_text"), reply_markup=kb_op)
-        return
+    # ОП
+    if _integration_on("botohub", "op"):
+        op_tasks = await get_bh_tasks(uid)
+        if op_tasks:
+            kb_op = kb.op_screen_kb([(t.get('id', 0), "Подписаться", t['url'], False) for t in op_tasks])
+            await message.answer(db.get_setting("botohub_text"), reply_markup=kb_op)
+            return
 
-    # Если ОП нет, пропускаем
     await finish_start(message, uid)
 
 async def finish_start(message: Message, uid: int):
     db.set_op_passed(uid)
     ref = db.confirm_referral(uid)
     if ref:
-        bns = int(db.get_setting("ref_bonus"))
+        bns = float(db.get_setting("ref_bonus"))
         db.add_balance(ref, bns)
-        try: await bot.send_message(ref, f'⭐ Твой реферал прошел ОП: <b>+{bns} ⭐</b>')
+        try: await bot.send_message(ref, f'⭐ Твой реферал прошел ОП: <b>+{fmt(bns)} ⭐</b>')
         except: pass
     await send_main_menu(message)
 
 @dp.callback_query(F.data == "op_check")
 async def op_check_cb(call: CallbackQuery):
+    if not _integration_on("botohub", "op"):
+        await finish_start(call.message, call.from_user.id)
+        return await call.answer()
+        
     op_tasks = await get_bh_tasks(call.from_user.id)
     if not op_tasks:
         try: await call.message.delete()
         except: pass
         await finish_start(call.message, call.from_user.id)
+        await call.answer()
     else:
         await call.answer("Вы подписались не на все каналы!", show_alert=True)
-    await call.answer()
 
 async def send_main_menu(message: Message):
     t = db.get_setting("menu_text").format(ref_bonus=db.get_setting("ref_bonus"))
@@ -311,7 +356,45 @@ async def menu_instruction(call: CallbackQuery):
     try: await call.message.delete()
     except: pass
     await send_av(call.message, db.get_setting("instruction_text"), kb.back_kb())
+    # ================== ВЫВОД ==================
+@dp.callback_query(F.data == "menu_withdraw")
+async def menu_withdraw(call: CallbackQuery):
+    try: await call.message.delete()
+    except: pass
+    u = db.get_user(call.from_user.id)
+    
+    # Проверка на друзей (защита от арабов)
+    req_friends = int(db.get_setting("withdraw_friends_required"))
+    conf_friends = db.get_confirmed_refs_count(u['user_id'])
+    
+    t = db.get_setting("withdraw_text").format(
+        balance=fmt(u['balance']), 
+        amounts=", ".join(map(str, WITHDRAW_AMOUNTS))
+    )
+    if conf_friends < req_friends:
+        t += f"\n\n⚠️ <b>Внимание!</b> Для вывода нужно пригласить минимум <b>{req_friends}</b> друзей (у тебя {conf_friends})."
+        
+    await send_av(call.message, t, kb.withdraw_kb())
 
+@dp.callback_query(F.data.startswith("wd_") & ~F.data.startswith("wd_page"))
+async def process_wd(call: CallbackQuery):
+    amount = float(call.data.split("_")[1])
+    u = db.get_user(call.from_user.id)
+    
+    if amount not in WITHDRAW_AMOUNTS:
+        return await call.answer("Неверная сумма", show_alert=True)
+    if u['balance'] < amount: 
+        return await call.answer(f"Не хватает! Баланс: {fmt(u['balance'])}", show_alert=True)
+    
+    req = int(db.get_setting("withdraw_friends_required"))
+    if db.get_confirmed_refs_count(u['user_id']) < req: 
+        return await call.answer(f"Нужно пригласить друзей: {req}", show_alert=True)
+    
+    wid = db.create_withdrawal(u['user_id'], amount)
+    await call.message.edit_text(f'✅ Заявка <b>#{wid}</b> на <b>{fmt(amount)}</b> ⭐ создана.\n\nОжидайте подтверждения.', reply_markup=kb.back_kb())
+    await call.answer()
+
+# ================== СТАТИСТИКА (ТОПЫ) ==================
 @dp.callback_query(F.data == "menu_stats")
 async def menu_stats(call: CallbackQuery):
     try: await call.message.delete()
@@ -320,63 +403,338 @@ async def menu_stats(call: CallbackQuery):
     t = db.get_setting("stats_text").format(total_users=s['total'], total_withdrawn=fmt(s['total_stars']))
     await send_av(call.message, t, kb.stats_kb())
 
-# ================== ВЫВОД ==================
-@dp.callback_query(F.data == "menu_withdraw")
-async def menu_withdraw(call: CallbackQuery):
-    try: await call.message.delete()
-    except: pass
-    u = db.get_user(call.from_user.id)
-    t = db.get_setting("withdraw_text").format(balance=fmt(u['balance']), amounts=", ".join(map(str, WITHDRAW_AMOUNTS)))
-    await send_av(call.message, t, kb.withdraw_kb())
+@dp.callback_query(F.data == "top_balance")
+async def top_balance(call: CallbackQuery):
+    users = db.get_top_balance()
+    txt = "🏆 <b>Топ по балансу</b>\n\n"
+    for i, u in enumerate(users, 1):
+        txt += f"{i}. @{u['username'] or 'id'+str(u['user_id'])} — <b>{fmt(u['balance'])}</b> ⭐\n"
+    await call.message.edit_text(txt, reply_markup=kb.back_kb("menu_stats"))
 
-@dp.callback_query(F.data.startswith("wd_"))
-async def process_wd(call: CallbackQuery):
-    amount = float(call.data.split("_")[1])
-    u = db.get_user(call.from_user.id)
-    
-    if u['balance'] < amount: 
-        return await call.answer(f"Не хватает! Баланс: {fmt(u['balance'])}", show_alert=True)
-    
-    req = int(db.get_setting("withdraw_friends_required"))
-    if db.get_confirmed_refs_count(u['user_id']) < req: 
-        return await call.answer(f"Нужно друзей: {req}", show_alert=True)
-    
-    wid = db.create_withdrawal(u['user_id'], amount)
-    await call.message.edit_text(f'✅ Заявка <b>#{wid}</b> на <b>{fmt(amount)}</b> ⭐ создана.\n\nСрок вывода: 5 минут — 24 часа.', reply_markup=kb.back_kb())
-    await call.answer()
-    # ================== АДМИНКА ==================
+@dp.callback_query(F.data == "top_refs")
+async def top_refs(call: CallbackQuery):
+    users = db.get_top_refs()
+    txt = "🏆 <b>Топ по рефералам</b>\n\n"
+    for i, u in enumerate(users, 1):
+        txt += f"{i}. @{u['username'] or 'id'+str(u['user_id'])} — <b>{u['refs']}</b> чел.\n"
+    await call.message.edit_text(txt, reply_markup=kb.back_kb("menu_stats"))
+
+# ================== АДМИНКА: БАЗА ==================
 @dp.message(Command("admin"))
 async def admin_cmd(message: Message, state: FSMContext):
     await state.clear()
     if message.from_user.id != ADMIN_ID: return
-    await message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_main_kb())
+    await message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
 
 @dp.callback_query(F.data == "admin_back", StateFilter("*"))
 async def admin_back_cb(call: CallbackQuery, state: FSMContext):
     await state.clear()
     if call.from_user.id != ADMIN_ID: return
-    await call.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_main_kb())
+    await call.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
     await call.answer()
 
-# --- ИНТЕГРАЦИИ ---
-@dp.callback_query(F.data == "admin_integrations")
+# ================== АДМИНКА: ЗАЯВКИ НА ВЫВОД ==================
+@dp.callback_query(F.data == "wd_list")
+async def admin_wd_list(call: CallbackQuery):
+    wds = db.get_pending_withdrawals()
+    if not wds:
+        return await call.message.edit_text("Нет активных заявок.", reply_markup=kb.wd_empty_kb())
+    await show_wd_page(call, 0)
+
+async def show_wd_page(call: CallbackQuery, idx: int):
+    wds = db.get_pending_withdrawals()
+    if not wds: return await call.message.edit_text("Заявок больше нет.", reply_markup=kb.wd_empty_kb())
+    
+    idx = max(0, min(idx, len(wds)-1))
+    w = wds[idx]
+    u = db.get_user(w['user_id'])
+    
+    refs = db.get_confirmed_refs_count(u['user_id'])
+    tasks = u['tasks_completed']
+    reg_date = u['registered_at'][:10] if u['registered_at'] else "—"
+    
+    txt = (
+        f"💸 <b>Заявка #{w['id']}</b>\n\n"
+        f"👤 Юзер: @{u['username'] or 'id'+str(u['user_id'])} (<code>{u['user_id']}</code>)\n"
+        f"💰 Сумма: <b>{fmt(w['amount'])}</b> ⭐\n"
+        f"📅 Регистрация: {reg_date}\n\n"
+        f"📊 <b>Аналитика (проверка на бота):</b>\n"
+        f"├ Друзей: {refs}\n"
+        f"├ Заданий: {tasks}\n"
+        f"└ Заработал всего: {fmt(u['total_earned'])} ⭐"
+    )
+    await call.message.edit_text(txt, reply_markup=kb.wd_page_kb(w['id'], idx, len(wds)))
+
+@dp.callback_query(F.data.startswith("wd_page:"))
+async def wd_page_nav(call: CallbackQuery):
+    idx = int(call.data.split(":")[1])
+    await show_wd_page(call, idx)
+
+@dp.callback_query(F.data.startswith("wd_ok:"))
+async def wd_ok(call: CallbackQuery):
+    wid = int(call.data.split(":")[1])
+    db.set_withdrawal_status(wid, 'completed')
+    w = db.get_withdrawal(wid)
+    if w:
+        try: await bot.send_message(w['user_id'], f"✅ Твоя заявка на вывод <b>{fmt(w['amount'])}</b> ⭐ одобрена!")
+        except: pass
+    await call.answer("Одобрено!")
+    await show_wd_page(call, 0)
+
+@dp.callback_query(F.data.startswith("wd_no:"))
+async def wd_no(call: CallbackQuery):
+    wid = int(call.data.split(":")[1])
+    db.set_withdrawal_status(wid, 'rejected')
+    w = db.get_withdrawal(wid)
+    if w:
+        db.add_balance(w['user_id'], w['amount']) # Возврат средств
+        try: await bot.send_message(w['user_id'], f"❌ Заявка на вывод отклонена. Средства возвращены на баланс.")
+        except: pass
+    await call.answer("Отклонено")
+    await show_wd_page(call, 0)
+
+@dp.callback_query(F.data == "wd_accept_all")
+async def wd_accept_all(call: CallbackQuery):
+    wds = db.get_pending_withdrawals()
+    for w in wds:
+        db.set_withdrawal_status(w['id'], 'completed')
+        try: await bot.send_message(w['user_id'], f"✅ Твоя заявка на вывод <b>{fmt(w['amount'])}</b> ⭐ одобрена!")
+        except: pass
+    await call.message.edit_text("✅ Все заявки одобрены.", reply_markup=kb.back_admin_kb())
+
+@dp.callback_query(F.data == "wd_reject_all")
+async def wd_reject_all(call: CallbackQuery):
+    wds = db.get_pending_withdrawals()
+    for w in wds:
+        db.set_withdrawal_status(w['id'], 'rejected')
+        db.add_balance(w['user_id'], w['amount'])
+        try: await bot.send_message(w['user_id'], f"❌ Заявка отклонена. Средства возвращены.")
+        except: pass
+    await call.message.edit_text("❌ Все заявки отклонены.", reply_markup=kb.back_admin_kb())
+
+# ================== АДМИНКА: ПОИСК ЮЗЕРА ==================
+@dp.callback_query(F.data == "user_find")
+async def admin_fu(call: CallbackQuery, state: FSMContext):
+    await call.message.edit_text("Введи ID или @username:", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_u_search)
+
+@dp.message(AdminStates.w_u_search)
+async def search_user(message: Message, state: FSMContext):
+    q = message.text.strip()
+    u = db.get_user(int(q)) if q.isdigit() else db.get_user_by_username(q)
+    if not u: return await message.answer("❌ Не найден.")
+    
+    refs = db.get_confirmed_refs_count(u['user_id'])
+    reg = u['registered_at'][:10] if u['registered_at'] else "—"
+    t = (f"👤 <b>Профиль</b>\nID: <code>{u['user_id']}</code>\nНик: @{u['username'] or '—'}\n"
+         f"Рега: {reg}\nБаланс: <b>{fmt(u['balance'])}</b> ⭐\nЗаработал: <b>{fmt(u['total_earned'])}</b>\n"
+         f"Заданий: <b>{u['tasks_completed']}</b>\nДрузей: <b>{refs}</b>\nБан: {'Да' if u['is_banned'] else 'Нет'}")
+    await message.answer(t, reply_markup=kb.user_action_kb(u['user_id'], u['is_banned']))
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("u_ban:"))
+async def user_ban(call: CallbackQuery):
+    uid = int(call.data.split(":")[1])
+    u = db.get_user(uid)
+    new_status = 0 if u['is_banned'] else 1
+    db.toggle_ban(uid, new_status)
+    await call.answer("Статус обновлен")
+    
+    # Обновляем клавиатуру и текст
+    refs = db.get_confirmed_refs_count(u['user_id'])
+    reg = u['registered_at'][:10] if u['registered_at'] else "—"
+    t = (f"👤 <b>Профиль</b>\nID: <code>{u['user_id']}</code>\nНик: @{u['username'] or '—'}\n"
+         f"Рега: {reg}\nБаланс: <b>{fmt(u['balance'])}</b> ⭐\nЗаработал: <b>{fmt(u['total_earned'])}</b>\n"
+         f"Заданий: <b>{u['tasks_completed']}</b>\nДрузей: <b>{refs}</b>\nБан: {'Да' if new_status else 'Нет'}")
+    await call.message.edit_text(t, reply_markup=kb.user_action_kb(uid, new_status))
+
+@dp.callback_query(F.data.startswith("u_bal:"))
+async def user_bal(call: CallbackQuery, state: FSMContext):
+    uid = int(call.data.split(":")[1])
+    await state.update_data(bal_uid=uid)
+    await call.message.edit_text("Введи сумму (например 50 или -20):", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_u_bal)
+
+@dp.message(AdminStates.w_u_bal)
+async def save_bal(message: Message, state: FSMContext):
+    try:
+        a = float(message.text); d = await state.get_data()
+        db.add_balance(d['bal_uid'], a)
+        await message.answer("✅ Баланс изменен!", reply_markup=kb.back_admin_kb())
+    except: await message.answer("Ошибка. Введи число.")
+    await state.clear()
+
+# ================== АДМИНКА: ПРОМОКОДЫ ==================
+@dp.callback_query(F.data == "promos")
+async def admin_promos(c: CallbackQuery):
+    await c.message.edit_text("🎟 <b>Промокоды</b>", reply_markup=kb.promos_kb())
+
+@dp.callback_query(F.data == "promo_list")
+async def promo_list(c: CallbackQuery):
+    promos = db.get_all_promos()
+    if not promos: return await c.message.edit_text("Нет промокодов.", reply_markup=kb.back_admin_kb())
+    txt = "📜 <b>Список промокодов:</b>\n\n"
+    for p in promos:
+        txt += f"<code>{p['code']}</code> | {p['amount']} ⭐ | {p['used']}/{p['max_uses']} | ОП: {'Да' if p['is_op'] else 'Нет'}\n"
+    await c.message.edit_text(txt, reply_markup=kb.back_admin_kb())
+
+@dp.callback_query(F.data == "promo_create")
+async def promo_create(c: CallbackQuery, state: FSMContext):
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="Обычный", callback_data="p_type:0"))
+    b.row(InlineKeyboardButton(text="С ОП", callback_data="p_type:1"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="promos"))
+    await c.message.edit_text("Выбери тип промокода:", reply_markup=b.as_markup())
+
+@dp.callback_query(F.data.startswith("p_type:"))
+async def promo_type(c: CallbackQuery, state: FSMContext):
+    is_op = int(c.data.split(":")[1])
+    await state.update_data(is_op=is_op)
+    await c.message.edit_text("Введи сумму чека (звезды):", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_p_sum)
+
+@dp.message(AdminStates.w_p_sum)
+async def promo_sum(m: Message, state: FSMContext):
+    try:
+        await state.update_data(p_amount=float(m.text))
+        await m.answer("Сколько активаций (лимит)?")
+        await state.set_state(AdminStates.w_p_act)
+    except: await m.answer("Ошибка. Введи число.")
+
+@dp.message(AdminStates.w_p_act)
+async def promo_act(m: Message, state: FSMContext):
+    try:
+        await state.update_data(p_uses=int(m.text)); d = await state.get_data()
+        if d['is_op']:
+            await m.answer("Какой сервис? (botohub, piarflow, tgrass, trafsly):")
+            await state.set_state(AdminStates.w_p_srv)
+        else:
+            code = "promo_" + str(random.randint(100000, 999999))
+            db.create_promo(code, d['p_amount'], d['p_uses'], is_op=0)
+            me = await bot.get_me()
+            await m.answer(f"✅ Чек создан!\nСсылка: https://t.me/{me.username}?start={code}", reply_markup=kb.back_admin_kb())
+            await state.clear()
+    except: await m.answer("Ошибка. Введи число.")
+
+@dp.message(AdminStates.w_p_srv)
+async def promo_srv(m: Message, state: FSMContext):
+    await state.update_data(p_srv=m.text.lower())
+    await m.answer("Сколько спонсоров пройти?")
+    await state.set_state(AdminStates.w_p_cnt)
+
+@dp.message(AdminStates.w_p_cnt)
+async def promo_cnt(m: Message, state: FSMContext):
+    try:
+        d = await state.get_data(); cnt = int(m.text)
+        code = "promo_op_" + str(random.randint(100000, 999999))
+        db.create_promo(code, d['p_amount'], d['p_uses'], is_op=1, op_service=d['p_srv'], op_count=cnt)
+        me = await bot.get_me()
+        await m.answer(f"✅ Чек с ОП создан!\nСсылка: https://t.me/{me.username}?start={code}", reply_markup=kb.back_admin_kb())
+        await state.clear()
+    except: await m.answer("Ошибка.")
+
+# ================== АДМИНКА: РЕКЛАМА ==================
+@dp.callback_query(F.data == "ad_menu")
+async def admin_ads(c: CallbackQuery):
+    await c.message.edit_text("📊 <b>Реклама</b>", reply_markup=kb.ad_menu_kb())
+
+@dp.callback_query(F.data == "ad_list")
+async def ad_list(c: CallbackQuery):
+    ads = db.get_all_ads()
+    if not ads: return await c.message.edit_text("Нет меток.", reply_markup=kb.back_admin_kb())
+    txt = "📜 <b>Список меток:</b>\n\n"
+    for a in ads:
+        txt += f"<code>{a['code']}</code> | Кликов: {a['clicks']} | Цена: {a['price']}₽\nСтата: <code>/stat_{a['code']}</code>\n\n"
+    await c.message.edit_text(txt, reply_markup=kb.back_admin_kb())
+
+@dp.callback_query(F.data == "ad_add")
+async def ad_add(c: CallbackQuery, state: FSMContext):
+    await c.message.edit_text("Введи код метки (например tiktok):", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_ad_code)
+
+@dp.message(AdminStates.w_ad_code)
+async def ad_code(m: Message, state: FSMContext):
+    await state.update_data(ad_code=m.text.lower())
+    await m.answer("Введи ID или @username рекламодателя:")
+    await state.set_state(AdminStates.w_ad_own)
+
+@dp.message(AdminStates.w_ad_own)
+async def ad_own(m: Message, state: FSMContext):
+    q = m.text.strip()
+    u = db.get_user(int(q)) if q.isdigit() else db.get_user_by_username(q)
+    if not u: return await m.answer("Не найден.")
+    await state.update_data(ad_own=u['user_id'])
+    await m.answer("Введи цену за переход (в рублях):")
+    await state.set_state(AdminStates.w_ad_prc)
+
+@dp.message(AdminStates.w_ad_prc)
+async def ad_prc(m: Message, state: FSMContext):
+    try:
+        d = await state.get_data(); prc = float(m.text)
+        db.add_ad_source(d['ad_code'], d['ad_own'], prc)
+        me = await bot.get_me()
+        await m.answer(f"✅ Метка создана!\nСсылка: https://t.me/{me.username}?start=ad_{d['ad_code']}\nСтата: /stat_{d['ad_code']}", reply_markup=kb.back_admin_kb())
+        await state.clear()
+    except: await m.answer("Ошибка. Введи число.")
+
+@dp.message(F.text.startswith("/stat_"))
+async def ad_stat_cmd(m: Message):
+    code = m.text.split("_", 1)[1].lower()
+    text, b = await _build_ad_stat(code)
+    if not text: return await m.answer("❌ Метка не найдена.")
+    await m.answer(text, reply_markup=b.as_markup())
+
+@dp.callback_query(F.data.startswith("upd_stat:"))
+async def upd_stat(c: CallbackQuery):
+    code = c.data.split(":", 1)[1]
+    text, b = await _build_ad_stat(code)
+    if not text: return await c.answer("Не найдено", show_alert=True)
+    await c.message.edit_text(text, reply_markup=b.as_markup())
+    await c.answer("Обновлено")
+
+async def _build_ad_stat(code: str):
+    src = db.get_ad_source(code)
+    if not src: return None, None
+    conn = db.get_conn()
+    total_users = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ?", (code,)).fetchone()[0]
+    passed_op = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ? AND passed_op = 1", (code,)).fetchone()[0]
+    tasks = conn.execute("SELECT COUNT(*) FROM task_completed tc JOIN users u ON tc.user_id = u.user_id WHERE u.ad_code = ?", (code,)).fetchone()[0]
+    earned = conn.execute("SELECT SUM(balance) FROM users WHERE ad_code = ?", (code,)).fetchone()[0] or 0.0
+    withdrawn = conn.execute("SELECT SUM(amount) FROM withdrawals w JOIN users u ON w.user_id = u.user_id WHERE u.ad_code = ? AND w.status = 'completed'", (code,)).fetchone()[0] or 0.0
+    conn.close()
+
+    text = (f"📊 <b>Статистика метки: {code}</b>\n\n"
+            f"👤 Переходов: <b>{src['clicks']}</b>\n"
+            f"🆕 Зарегалось: <b>{total_users}</b>\n"
+            f"✅ Прошли ОП: <b>{passed_op}</b>\n"
+            f"🎯 Заданий выполнено: <b>{tasks}</b>\n"
+            f"💰 Заработали: <b>{fmt(earned)}</b> ⭐\n"
+            f"💸 Вывели: <b>{fmt(withdrawn)}</b> ⭐\n\n"
+            f"💵 Цена перехода: <b>{src['price']} ₽</b>\n"
+            f"👤 Рекламодатель: <code>{src['owner_id']}</code>")
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="🔄 Обновить", callback_data=f"upd_stat:{code}"))
+    return text, b
+
+# ================== АДМИНКА: ИНТЕГРАЦИИ ==================
+@dp.callback_query(F.data == "tasks_menu")
 async def admin_ints(call: CallbackQuery):
     b = InlineKeyboardBuilder()
     for i in db.get_all_integrations():
         s = "🟢" if i['status'] == 'on' else "🔴"
         b.row(InlineKeyboardButton(text=f"{s} {i['name'].upper()} ({'ОП' if i['role']=='op' else 'Задания'})", callback_data=f"int_view:{i['name']}"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    await call.message.edit_text("🔌 <b>Интеграции</b>", reply_markup=b.as_markup())
+    await call.message.edit_text("🔌 <b>Интеграции и Сервисы</b>\nНастрой API и роли:", reply_markup=b.as_markup())
 
 @dp.callback_query(F.data.startswith("int_view:"))
 async def int_view(call: CallbackQuery):
     n = call.data.split(":")[1]; i = db.get_integration(n)
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="🔴 Выкл" if i['status'] == 'on' else "🟢 Вкл", callback_data=f"int_toggle:{n}"))
-    b.row(InlineKeyboardButton(text="Сменить роль", callback_data=f"int_role:{n}"))
-    b.row(InlineKeyboardButton(text="🔑 API Ключ", callback_data=f"int_key:{n}"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_integrations"))
-    await call.message.edit_text(f"⚙️ <b>{n.upper()}</b>\nРоль: {i['role']}\nКлюч: {i['api_key'] or 'Нет'}", reply_markup=b.as_markup())
+    b.row(InlineKeyboardButton(text="Сменить роль (ОП/Задания)", callback_data=f"int_role:{n}"))
+    b.row(InlineKeyboardButton(text="🔑 Сменить API Ключ", callback_data=f"int_key:{n}"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="tasks_menu"))
+    await call.message.edit_text(f"⚙️ <b>{n.upper()}</b>\nРоль: {i['role']}\nКлюч: {i['api_key'] or 'По умолчанию'}", reply_markup=b.as_markup())
 
 @dp.callback_query(F.data.startswith("int_toggle:"))
 async def int_toggle(call: CallbackQuery):
@@ -402,163 +760,42 @@ async def save_int_key(message: Message, state: FSMContext):
     d = await state.get_data(); db.update_integration_key(d['int_name'], message.text.strip())
     await state.clear(); await message.answer("✅ Ключ сохранен!", reply_markup=kb.back_admin_kb())
 
-# --- ПОИСК ЮЗЕРА ---
-@dp.callback_query(F.data == "admin_find_user")
-async def admin_fu(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text("Введи ID или @username:", reply_markup=kb.back_admin_kb())
-    await state.set_state(AdminStates.w_u_search)
+# ================== АДМИНКА: НАСТРОЙКИ ==================
+@dp.callback_query(F.data == "settings")
+async def admin_settings(c: CallbackQuery):
+    await c.message.edit_text("⚙️ <b>Настройки</b>", reply_markup=kb.settings_kb())
 
-@dp.message(AdminStates.w_u_search)
-async def search_user(message: Message, state: FSMContext):
-    q = message.text.strip()
-    u = db.get_user(int(q)) if q.isdigit() else db.get_user_by_username(q)
-    if not u: return await message.answer("❌ Не найден.")
-    t = f"👤 <b>Профиль</b>\nID: <code>{u['user_id']}</code>\nНик: @{u['username'] or '—'}\nБаланс: <b>{fmt(u['balance'])}</b> ⭐\nЗаработал: <b>{fmt(u['total_earned'])}</b>\nЗаданий: <b>{u['tasks_completed']}</b>\nБан: {'Да' if u['is_banned'] else 'Нет'}"
-    await message.answer(t, reply_markup=kb.user_action_kb(u['user_id'], u['is_banned']))
+@dp.callback_query(F.data.startswith("set:"))
+async def set_val(c: CallbackQuery, state: FSMContext):
+    key = c.data.split(":")[1]
+    await state.update_data(set_key=key)
+    await c.message.edit_text(f"Текущее значение <b>{key}</b>: {db.get_setting(key)}\n\nВведи новое значение:", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_set_val)
+
+@dp.message(AdminStates.w_set_val)
+async def save_set(m: Message, state: FSMContext):
+    d = await state.get_data()
+    db.set_setting(d['set_key'], m.text.strip())
+    await m.answer("✅ Настройка сохранена!", reply_markup=kb.back_admin_kb())
     await state.clear()
 
-@dp.callback_query(F.data.startswith("u_ban:"))
-async def user_ban(call: CallbackQuery):
-    uid = int(call.data.split(":")[1]); u = db.get_user(uid)
-    db.toggle_ban(uid, 0 if u['is_banned'] else 1)
-    await call.answer("Готово")
-    await call.message.edit_text("Обновлено. Введи ID снова.")
+# ================== АДМИНКА: РАССЫЛКА ==================
+BC_STATE = {"text": "", "media": None, "media_type": None, "limit": 0}
 
-@dp.callback_query(F.data.startswith("u_bal:"))
-async def user_bal(call: CallbackQuery, state: FSMContext):
-    uid = int(call.data.split(":")[1])
-    await state.update_data(bal_uid=uid)
-    await call.message.edit_text("Введи сумму (например 50 или -20):", reply_markup=kb.back_admin_kb())
-    await state.set_state(AdminStates.w_u_bal)
-
-@dp.message(AdminStates.w_u_bal)
-async def save_bal(message: Message, state: FSMContext):
-    try:
-        a = float(message.text); d = await state.get_data()
-        db.add_balance(d['bal_uid'], a)
-        await message.answer("✅ Баланс изменен!", reply_markup=kb.back_admin_kb())
-    except: await message.answer("Ошибка.")
-    await state.clear()
-
-# --- ПРОМОКОДЫ ---
-@dp.callback_query(F.data == "admin_promos")
-async def admin_pr(c: CallbackQuery):
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="➕ Обычный", callback_data="promo_create_normal"))
-    b.row(InlineKeyboardButton(text="➕ С ОП", callback_data="promo_create_op"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    await c.message.edit_text("🎟 <b>Промокоды</b>", reply_markup=b.as_markup())
-
-@dp.callback_query(F.data.startswith("promo_create_"))
-async def promo_create(c: CallbackQuery, state: FSMContext):
-    is_op = 1 if "op" in c.data else 0
-    await state.update_data(is_op=is_op)
-    await c.message.edit_text("Введи сумму чека (звезды):", reply_markup=kb.back_admin_kb())
-    await state.set_state(AdminStates.w_p_sum)
-
-@dp.message(AdminStates.w_p_sum)
-async def promo_sum(m: Message, state: FSMContext):
-    try:
-        await state.update_data(p_amount=float(m.text))
-        await m.answer("Сколько активаций?")
-        await state.set_state(AdminStates.w_p_act)
-    except: await m.answer("Ошибка.")
-
-@dp.message(AdminStates.w_p_act)
-async def promo_act(m: Message, state: FSMContext):
-    try:
-        await state.update_data(p_uses=int(m.text)); d = await state.get_data()
-        if d['is_op']:
-            await m.answer("Какой сервис? (botohub, subgram, flyer):")
-            await state.set_state(AdminStates.w_p_srv)
-        else:
-            code = "promo_" + str(random.randint(100000, 999999))
-            db.create_promo(code, d['p_amount'], d['p_uses'], is_op=0)
-            me = await bot.get_me()
-            await m.answer(f"✅ Чек создан!\nСсылка: https://t.me/{me.username}?start={code}", reply_markup=kb.back_admin_kb())
-            await state.clear()
-    except: await m.answer("Ошибка.")
-
-@dp.message(AdminStates.w_p_srv)
-async def promo_srv(m: Message, state: FSMContext):
-    await state.update_data(p_srv=m.text.lower())
-    await m.answer("Сколько спонсоров пройти?")
-    await state.set_state(AdminStates.w_p_cnt)
-
-@dp.message(AdminStates.w_p_cnt)
-async def promo_cnt(m: Message, state: FSMContext):
-    try:
-        d = await state.get_data(); cnt = int(m.text)
-        code = "promo_op_" + str(random.randint(100000, 999999))
-        db.create_promo(code, d['p_amount'], d['p_uses'], is_op=1, op_service=d['p_srv'], op_count=cnt)
-        me = await bot.get_me()
-        await m.answer(f"✅ Чек с ОП создан!\nСсылка: https://t.me/{me.username}?start={code}", reply_markup=kb.back_admin_kb())
-        await state.clear()
-    except: await m.answer("Ошибка.")
-
-# --- РЕКЛАМА ---
-@dp.callback_query(F.data == "admin_ads")
-async def admin_ads(c: CallbackQuery):
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="➕ Создать метку", callback_data="ad_create"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    await c.message.edit_text("📊 <b>Реклама</b>", reply_markup=b.as_markup())
-
-@dp.callback_query(F.data == "ad_create")
-async def ad_create(c: CallbackQuery, state: FSMContext):
-    await c.message.edit_text("Введи код метки (например tiktok):", reply_markup=kb.back_admin_kb())
-    await state.set_state(AdminStates.w_ad_code)
-
-@dp.message(AdminStates.w_ad_code)
-async def ad_code(m: Message, state: FSMContext):
-    await state.update_data(ad_code=m.text.lower())
-    await m.answer("Введи ID или @username рекламодателя:")
-    await state.set_state(AdminStates.w_ad_own)
-
-@dp.message(AdminStates.w_ad_own)
-async def ad_own(m: Message, state: FSMContext):
-    q = m.text.strip()
-    u = db.get_user(int(q)) if q.isdigit() else db.get_user_by_username(q)
-    if not u: return await m.answer("Не найден.")
-    await state.update_data(ad_own=u['user_id'])
-    await m.answer("Введи цену за переход (число):")
-    await state.set_state(AdminStates.w_ad_prc)
-
-@dp.message(AdminStates.w_ad_prc)
-async def ad_prc(m: Message, state: FSMContext):
-    try:
-        d = await state.get_data(); prc = float(m.text)
-        db.add_ad_source(d['ad_code'], d['ad_own'], prc)
-        me = await bot.get_me()
-        await m.answer(f"✅ Метка создана!\nСсылка: https://t.me/{me.username}?start=ad_{d['ad_code']}\nСтат: /stat_{d['ad_code']}", reply_markup=kb.back_admin_kb())
-        await state.clear()
-    except: await m.answer("Ошибка.")
-
-# --- БЭКАП ---
-@dp.callback_query(F.data == "admin_backup")
-async def admin_backup(c: CallbackQuery):
-    try:
-        doc = FSInputFile(DB)
-        await c.message.answer_document(doc, caption="💾 Бэкап БД")
-    except Exception as e: await c.message.answer(f"Ошибка: {e}")
-    await c.answer()
-    # ================== РАССЫЛКА ==================
-BC_STATE = {}
-
-@dp.callback_query(F.data == "admin_broadcast")
+@dp.callback_query(F.data == "broadcast_menu")
 async def bc_menu(c: CallbackQuery):
-    if c.from_user.id != ADMIN_ID: return
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✏️ Текст", callback_data="bc_edit_text"))
-    b.row(InlineKeyboardButton(text="📎 Медиа", callback_data="bc_edit_media"))
+    b.row(InlineKeyboardButton(text="📎 Медиа (фото/видео)", callback_data="bc_edit_media"))
+    b.row(InlineKeyboardButton(text="🔢 Лимит юзеров (0 = все)", callback_data="bc_edit_limit"))
     b.row(InlineKeyboardButton(text="👁 Предпросмотр", callback_data="bc_preview"))
     b.row(InlineKeyboardButton(text="✅ Отправить", callback_data="bc_start"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    await c.message.edit_text("📢 <b>Рассылка</b>", reply_markup=b.as_markup())
+    await c.message.edit_text("📢 <b>Умная рассылка</b>", reply_markup=b.as_markup())
 
 @dp.callback_query(F.data == "bc_edit_text")
 async def bc_edit_text(c: CallbackQuery, state: FSMContext):
-    await c.message.edit_text("Отправь текст (можно с HTML):", reply_markup=kb.back_admin_kb())
+    await c.message.edit_text("Отправь текст (HTML):", reply_markup=kb.back_admin_kb())
     await state.set_state(AdminStates.w_bc_text)
 
 @dp.message(AdminStates.w_bc_text)
@@ -574,94 +811,84 @@ async def bc_edit_media(c: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminStates.w_bc_media)
 async def bc_save_media(m: Message, state: FSMContext):
-    if m.photo: BC_STATE['media'] = ('photo', m.photo[-1].file_id)
-    elif m.video: BC_STATE['media'] = ('video', m.video.file_id)
+    if m.photo: 
+        BC_STATE['media'] = m.photo[-1].file_id
+        BC_STATE['media_type'] = 'photo'
+    elif m.video: 
+        BC_STATE['media'] = m.video.file_id
+        BC_STATE['media_type'] = 'video'
     else: return await m.answer("Нужно фото или видео.")
     await m.answer("✅ Медиа сохранено!", reply_markup=kb.back_admin_kb())
+    await state.clear()
+
+@dp.callback_query(F.data == "bc_edit_limit")
+async def bc_edit_limit(c: CallbackQuery, state: FSMContext):
+    await c.message.edit_text("Сколько юзеров обработать? (0 = все):", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_bc_limit)
+
+@dp.message(AdminStates.w_bc_limit)
+async def bc_save_limit(m: Message, state: FSMContext):
+    try:
+        BC_STATE['limit'] = int(m.text)
+        await m.answer(f"✅ Лимит: {BC_STATE['limit']}", reply_markup=kb.back_admin_kb())
+    except: await m.answer("Ошибка. Введи число.")
     await state.clear()
 
 @dp.callback_query(F.data == "bc_preview")
 async def bc_preview(c: CallbackQuery):
     text = BC_STATE.get('text', '')
     media = BC_STATE.get('media')
+    mtype = BC_STATE.get('media_type')
     if not text and not media: return await c.answer("Пусто", show_alert=True)
     
     if media:
-        if media[0] == 'photo': await c.message.answer_photo(media[1], caption=text)
-        else: await c.message.answer_video(media[1], caption=text)
+        if mtype == 'photo': await c.message.answer_photo(media, caption=text)
+        else: await c.message.answer_video(media, caption=text)
     else: await c.message.answer(text)
+    await c.answer()
 
 @dp.callback_query(F.data == "bc_start")
 async def bc_start(c: CallbackQuery):
-    if c.from_user.id != ADMIN_ID: return
     users = db.get_conn().execute("SELECT user_id FROM users").fetchall()
-    await c.message.edit_text(f"⏳ Рассылка для {len(users)} юзеров...")
+    limit = BC_STATE.get('limit', 0)
+    if limit > 0: users = users[:limit]
     
+    await c.message.edit_text(f"⏳ Рассылка для {len(users)} юзеров...")
     text = BC_STATE.get('text', '')
     media = BC_STATE.get('media')
+    mtype = BC_STATE.get('media_type')
     ok, err = 0, 0
     
     for u in users:
         try:
             if media:
-                if media[0] == 'photo': await c.bot.send_photo(u['user_id'], media[1], caption=text)
-                else: await c.bot.send_video(u['user_id'], media[1], caption=text)
+                if mtype == 'photo': await c.bot.send_photo(u['user_id'], media, caption=text)
+                else: await c.bot.send_video(u['user_id'], media, caption=text)
             else: await c.bot.send_message(u['user_id'], text)
             ok += 1
-            await asyncio.sleep(0.05) # Задержка для избежания лимитов
+            await asyncio.sleep(0.05) # ~20 сообщений в сек (безопасно)
         except: err += 1
     
     await c.message.answer(f"✅ Готово.\nУспешно: {ok}\nОшибок: {err}", reply_markup=kb.back_admin_kb())
     BC_STATE.clear()
+    BC_STATE.update({"text": "", "media": None, "media_type": None, "limit": 0})
 
-# ================== СТАТИСТИКА РЕКЛАМЫ (по команде /stat_CODE) ==================
-@dp.message(F.text.startswith("/stat_"))
-async def ad_stat_cmd(m: Message):
-    code = m.text.split("_")[1].lower()
-    src = db.get_ad_source(code)
-    if not src: return await m.answer("❌ Метка не найдена.")
-    
-    with db.get_conn() as conn:
-        total_users = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ?", (code,)).fetchone()[0]
-        passed_op = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ? AND passed_op = 1", (code,)).fetchone()[0]
-        tasks = conn.execute("SELECT COUNT(*) FROM task_completed tc JOIN users u ON tc.user_id = u.user_id WHERE u.ad_code = ?", (code,)).fetchone()[0]
-        earned = conn.execute("SELECT SUM(balance) FROM users WHERE ad_code = ?", (code,)).fetchone()[0] or 0.0
-        withdrawn = conn.execute("SELECT SUM(amount) FROM withdrawals w JOIN users u ON w.user_id = u.user_id WHERE u.ad_code = ? AND w.status = 'completed'", (code,)).fetchone()[0] or 0.0
-    
-    text = (
-        f"📊 <b>Статистика метки: {code}</b>\n\n"
-        f"👤 Переходов: <b>{src['clicks']}</b>\n"
-        f"🆕 Зарегалось: <b>{total_users}</b>\n"
-        f"✅ Прошли ОП: <b>{passed_op}</b>\n"
-        f"🎯 Заданий выполнено: <b>{tasks}</b>\n"
-        f"💰 Заработали: <b>{fmt(earned)}</b> ⭐\n"
-        f"💸 Вывели: <b>{fmt(withdrawn)}</b> ⭐\n\n"
-        f"💵 Цена перехода: <b>{src['price']} ₽</b>\n"
-        f"👤 Рекламодатель: <code>{src['owner_id']}</code>"
-    )
-    
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🔄 Обновить", callback_data=f"upd_stat:{code}"))
-    await m.answer(text, reply_markup=b.as_markup())
+# ================== АДМИНКА: БЭКАП ==================
+@dp.callback_query(F.data == "backup_help")
+async def admin_backup(c: CallbackQuery):
+    try:
+        doc = FSInputFile(DB)
+        await c.message.answer_document(doc, caption="💾 Бэкап БД")
+    except Exception as e: await c.message.answer(f"Ошибка: {e}")
+    await c.answer()
 
-@dp.callback_query(F.data.startswith("upd_stat:"))
-async def upd_stat(c: CallbackQuery):
-    # Эмулируем вызов команды заново для обновления
-    c.message.text = f"/stat_{c.data.split(':')[1]}"
-    await ad_stat_cmd(c.message)
-    await c.answer("Обновлено")
-
-# ================== АВТО-БЭКАП ==================
 async def daily_backup_worker():
     while True:
         try:
             now = datetime.now()
-            # Время бэкапа: 08:00 и 20:00
             targets = [now.replace(hour=8, minute=0, second=0, microsecond=0), now.replace(hour=20, minute=0, second=0, microsecond=0)]
             next_run = next((t for t in targets if t > now), targets[0] + timedelta(days=1))
-            wait_seconds = (next_run - now).total_seconds()
-            await asyncio.sleep(wait_seconds)
-            
+            await asyncio.sleep((next_run - now).total_seconds())
             doc = FSInputFile(DB)
             await bot.send_document(ADMIN_ID, doc, caption=f"📦 <b>Авто-бэкап</b>\n{datetime.now().strftime('%d.%m.%Y %H:%M')}")
         except Exception as e:

@@ -95,7 +95,7 @@ async def pf_check(uid, tid):
     return False
 
 async def tg_get(uid):
-    token = db.get_integration('tgrass')['api_key'] or TGRASS d_TOKEN
+    token = db.get_integration('tgrass')['api_key'] or TGRASS_TOKEN  # <--- Вот тут исправлено
     headers = {"Auth": token}
     payload = {"tg_user_id": uid, "is_premium": False, "lang": "ru"}
     async with aiohttp.ClientSession() as s:
@@ -104,7 +104,7 @@ async def tg_get(uid):
                 if r.status == 200:
                     d = await r.json()
                     off = d.get("offers", [])
-                    if off and.get("status") == "not_ok":
+                    if off and d.get("status") == "not_ok":
                         return {"srv": "tgrass", "tid": str(off[0]["offer_id"]), "link": off[0]["link"]}
         except: pass
     return None

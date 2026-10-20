@@ -49,7 +49,7 @@ def init_db():
         for name, role in services:
             cur.execute("INSERT OR IGNORE INTO integrations (name, role) VALUES (?, ?)", (name, role))
 
-        # ================= АВТО-МИГРАЦИИ (БЕЗОПАСНОЕ ДОБАВЛЕНИЕ КОЛОНОК) =================
+        # ================= АВТО-МИГРАЦИИ (ДОБАВЛЯЕМ НОВЫЕ КОЛОНКИ В СТАРУЮ БАЗУ) =================
         cur.execute("PRAGMA table_info(users)")
         cols = {r[1] for r in cur.fetchall()}
         if "total_earned" not in cols: cur.execute("ALTER TABLE users ADD COLUMN total_earned REAL DEFAULT 0.0")
@@ -58,7 +58,7 @@ def init_db():
         if "welcome_bonus_paid" not in cols: cur.execute("ALTER TABLE users ADD COLUMN welcome_bonus_paid INTEGER DEFAULT 0")
         if "registered_at" not in cols: cur.execute("ALTER TABLE users ADD COLUMN registered_at TEXT")
         if "ad_code" not in cols: cur.execute("ALTER TABLE users ADD COLUMN ad_code TEXT DEFAULT NULL")
-        if "is_banned" not in cols: cur.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0") # <-- Добавлено
+        if "is_banned" not in cols: cur.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
 
         cur.execute("PRAGMA table_info(ad_sources)")
         cols_ads = {r[1] for r in cur.fetchall()}
@@ -70,7 +70,7 @@ def init_db():
         if "op_service" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_service TEXT")
         if "op_count" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_count INTEGER DEFAULT 0")
 
-        # Заполняем настройки по умолчанию
+        # Заполняем настройки по умолчанию, если их нет
         for k, v in DEFAULTS.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
         conn.commit()

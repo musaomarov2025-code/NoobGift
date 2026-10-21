@@ -2,8 +2,6 @@ import os
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
-# Главный админ — берётся из переменных окружения BotHost.
-# Если переменная не задана — используется старый ID как fallback.
 _admin_env = os.environ.get("ADMIN_ID", "8742164697").strip()
 ADMIN_ID = int(_admin_env) if _admin_env else 8742164697
 
@@ -13,7 +11,7 @@ DB = "/app/data/cows.db"
 BOTOHUB_TOKEN = "19ce7a66-92b1-46b6-b0b0-0c539703bb7c"
 BOTOHUB_URL = "https://botohub.me/get-tasks-extended"
 
-# === Задания (3 сервиса) ===
+# === Задания ===
 PIARFLOW_TOKEN = "XDTTx_U9OEaSruxOOA4C1l1I8rPIKHQ1"
 PIARFLOW_URL = "https://piarflow.com/v1"
 
@@ -52,7 +50,7 @@ DEFAULTS = {
     "ref_text": (
         '<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> <b>Зарабатывай звёзды, приглашая друзей</b>\n\n'
         '├ За друга — <b>{ref_bonus} <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji></b>\n'
-        '└ Друг должен пройти ОП\n\n'
+        '└ Друг должен подписаться на спонсоров\n\n'
         '<b>Твоя ссылка:</b>\n{ref_link}\n\n'
         '<tg-emoji emoji-id="5280605017043118832">👥</tg-emoji> Всего: <b>{total_refs}</b>\n'
         '<tg-emoji emoji-id="5411197345968701560">✅</tg-emoji> Засчитано: <b>{confirmed_refs}</b>\n\n'

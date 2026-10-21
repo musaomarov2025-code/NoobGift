@@ -14,11 +14,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import (
-    BOT_TOKEN, ADMIN_ID, DB, DEFAULTS, WITHDRAW_AMOUNTS,
-    BOTOHUB_TOKEN, BOTOHUB_URL, PIARFLOW_TOKEN, PIARFLOW_URL,
-    TGRASS_TOKEN, TGRASS_URL, TRAFSLY_TOKEN, TRAFSLY_URL
-)
+from config import *
 import database as db
 import keyboards as kb
 
@@ -26,87 +22,50 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTM
 dp = Dispatcher()
 
 class IsAdminFilter(BaseFilter):
-    async def __call__(self, event) -> bool:
-        return db.is_admin(event.from_user.id)
+    async def __call__(self, event) -> bool: return db.is_admin(event.from_user.id)
 
-def _integration_on(name: str, role: str = None) -> bool:
-    try:
-        i = db.get_integration(name)
-        if not i or i['status'] != 'on': return False
-        if role and i['role'] != role: return False
-        return True
-    except Exception: return False
-
-def fmt(amt):
-    return f"{amt:.2f}".rstrip('0').rstrip('.') if amt % 1 else f"{amt:.0f}"
-
+def fmt(amt): return f"{amt:.2f}".rstrip('0').rstrip('.') if amt % 1 else f"{amt:.0f}"
 def safe_format(text: str, **kwargs):
-    for k, v in kwargs.items():
-        text = text.replace("{" + k + "}", str(v))
+    for k, v in kwargs.items(): text = text.replace("{" + k + "}", str(v))
     return text
 
 async def send_av(message, text, markup=None):
-    banner = db.get_next_banner()
-    if banner:
-        if banner['caption']:
-            text += "\n\n" + banner['caption']
-        style = banner['color'] if banner['color'] in ('primary', 'success', 'danger') else None
-        banner_btn = InlineKeyboardButton(text=banner['text'], url=banner['url'], style=style)
-        if markup:
-            new_kb = [list(row) for row in markup.inline_keyboard]
-            new_kb.append([banner_btn])
-            markup = InlineKeyboardMarkup(inline_keyboard=new_kb)
-        else:
-            b = InlineKeyboardBuilder()
-            b.row(banner_btn)
-            markup = b.as_markup()
-
     av = db.get_setting("menu_avatar")
     if av:
-        try:
+        try: 
             await message.answer_photo(photo=av, caption=text, reply_markup=markup)
             return
         except Exception: pass
-    
-    try:
-        await message.answer(text=text, reply_markup=markup)
-    except Exception as e:
-        print(f"Ошибка отправки меню: {e}")
-        await message.answer("⚠️ Ошибка отображения меню. Проверьте настройки текста.", reply_markup=markup)
+    await message.answer(text=text, reply_markup=markup)
+
+class UserStates(StatesGroup):
+    w_amount = State()
 
 class AdminStates(StatesGroup):
     w_p_sum = State(); w_p_act = State(); w_p_srv = State(); w_p_cnt = State()
     w_u_search = State(); w_u_bal = State()
     w_ad_code = State(); w_ad_own = State(); w_ad_prc = State()
-    w_int_key = State()
-    w_bc_text = State(); w_bc_media = State(); w_bc_limit = State(); w_bc_btn_bulk = State()
-    w_set_val = State()
-    w_priv_btn_bulk = State()
-    w_admin_add = State()
-    w_banner_caption = State(); w_banner_text = State(); w_banner_url = State(); w_banner_color = State()
+    w_int_key = State(); w_bc_text = State(); w_bc_media = State(); w_bc_limit = State(); w_bc_btn_bulk = State()
+    w_set_val = State(); w_priv_btn_bulk = State(); w_admin_add = State()
+    w_sn_text = State(); w_sn_media = State(); w_sn_btn = State(); w_sn_interval = State()
 
-# ================= API ФУНКЦИИ =================
+# ================= API =================
 async def pf_get(uid):
     token = db.get_integration('piarflow')['api_key'] or PIARFLOW_TOKEN
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {"user_id": uid, "chat_id": uid, "max_sponsors": 1}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post(f"{PIARFLOW_URL}/sponsors", json=payload, headers=headers, timeout=10) as r:
+            async with s.post(f"{PIARFLOW_URL}/sponsors", json={"user_id": uid, "chat_id": uid, "max_sponsors": 1}, headers={"Authorization": f"Bearer {token}"}, timeout=10) as r:
                 if r.status == 200:
                     d = await r.json()
                     sp = d.get("sponsors", [])
-                    if sp and sp[0].get("status") == "unsubscribed":
-                        return {"srv": "piarflow", "tid": sp[0]["link"], "link": sp[0]["link"]}
+                    if sp and sp[0].get("status") == "unsubscribed": return {"srv": "piarflow", "tid": sp[0]["link"], "link": sp[0]["link"]}
         except Exception: pass
     return None
 
 async def pf_check(uid, tid):
     token = db.get_integration('piarflow')['api_key'] or PIARFLOW_TOKEN
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {"user_id": uid, "links": [tid]}
     async with aiohttp.ClientSession() as s:
-        async with s.post(f"{PIARFLOW_URL}/sponsors/check", json=payload, headers=headers) as r:
+        async with s.post(f"{PIARFLOW_URL}/sponsors/check", json={"user_id": uid, "links": [tid]}, headers={"Authorization": f"Bearer {token}"}) as r:
             if r.status == 200:
                 d = await r.json()
                 return d.get("sponsors", [{}])[0].get("status") in ["subscribed", "not_counted"]
@@ -114,57 +73,44 @@ async def pf_check(uid, tid):
 
 async def tg_get(uid):
     token = db.get_integration('tgrass')['api_key'] or TGRASS_TOKEN
-    headers = {"Auth": token}
-    payload = {"tg_user_id": uid, "is_premium": False, "lang": "ru"}
-    async with aiohttp.json.ClientSession() as s:
+    async with aiohttp.ClientSession() as s:
         try:
-            async with s.post("https://tgrass.space/tasks", json=payload, headers=headers, timeout=10) as r:
+            async with s.post("https://tgrass.space/tasks", json={"tg_user_id": uid, "is_premium": False, "lang": "ru"}, headers={"Auth": token}, timeout=10) as r:
                 if r.status == 200:
                     d = await r.json()
                     if d.get("status") == "not_ok" and d.get("offers"):
                         for offer in d["offers"]:
-                            if not offer.get("subscribed"):
-                                return {"srv": "tgrass", "tid": str(offer["offer_id"]), "link": offer["link"]}
+                            if not offer.get("subscribed"): return {"srv": "tgrass", "tid": str(offer["offer_id"]), "link": offer["link"]}
         except Exception: pass
     return None
 
 async def tg_check(uid, tid):
     token = db.get_integration('tgrass')['api_key'] or TGRASS_TOKEN
-    headers = {"Auth": token}
-    payload = {"tg_user_id": uid, "offer_id": int(tid)}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post("https://tgrass.space/check", json=payload, headers=headers, timeout=10) as r:
+            async with s.post("https://tgrass.space/check", json={"tg_user_id": uid, "offer_id": int(tid)}, headers={"Auth": token}, timeout=10) as r:
                 if r.status != 200: return False
-                d = await r()
-                print(f"DEBUG TGRASS CHECK: {d}")
+                d = await r.json()
                 if d.get("status") == "subscribed": return True
-                return False
-        except Exception as e:
-            print(f"TGRASS CHECK EXCEPTION: {e}")
-            return False
+        except Exception: pass
+    return False
 
 async def tr_get(uid):
     token = db.get_integration('trafsly')['api_key'] or TRAFSLY_TOKEN
-    headers = {"Auth": token}
-    payload = {"user_id": uid}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post("https://api.trafsly.com/api/v1/get-sponsors", json=payload, headers=headers, timeout=10) as r:
+            async with s.post("https://api.trafsly.com/api/v1/get-sponsors", json={"user_id": uid}, headers={"Auth": token}, timeout=10) as r:
                 if r.status == 200:
                     d = await r.json()
                     sp = d.get("sponsors", [])
-                    if sp and d.get("status") == "warning":
-                        return {"srv": "trafsly", "tid": str(sp[0]["ads_id"]), "link": sp[0]["link"]}
+                    if sp and d.get("status") == "warning": return {"srv": "trafsly", "tid": str(sp[0]["ads_id"]), "link": sp[0]["link"]}
         except Exception: pass
     return None
 
 async def tr_check(uid, tid):
     token = db.get_integration('trafsly')['api_key'] or TRAFSLY_TOKEN
-    headers = {"Auth": token}
-    payload = {"user_id": uid, "ads_id": tid}
     async with aiohttp.ClientSession() as s:
-        async with s.post("https://api.trafsly.com/api/v1/confirm-subscription", json=payload, headers=headers) as r:
+        async with s.post("https://api.trafsly.com/api/v1/confirm-subscription", json={"user_id": uid, "ads_id": tid}, headers={"Auth": token}) as r:
             if r.status == 200:
                 d = await r.json()
                 return d.get("subscribed") is True
@@ -173,27 +119,21 @@ async def tr_check(uid, tid):
 async def sg_get(uid):
     token = db.get_integration('subgram')['api_key']
     if not token: return None
-    headers = {"Auth": token}
-    payload = {"user_id": uid, "chat_id": uid, "max_sponsors": 1, "get_links": 1}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post("https://api.subgram.org/get-sponsors", json=payload, headers=headers, timeout=10) as r:
+            async with s.post("https://api.subgram.org/get-sponsors", json={"user_id": uid, "chat_id": uid, "max_sponsors": 1, "get_links": 1}, headers={"Auth": token}, timeout=10) as r:
                 if r.status == 200:
                     d = await r.json()
-                    if d.get("status") == "warning" and d.get("sponsors"):
-                        sp = d["sponsors"][0]
-                        return {"srv": "subgram", "tid": sp["resource_id"], "link": sp["link"]}
+                    if d.get("status") == "warning" and d.get("sponsors"): return {"srv": "subgram", "tid": d["sponsors"][0]["resource_id"], "link": d["sponsors"][0]["link"]}
         except Exception: pass
     return None
 
 async def sg_check(uid, tid):
     token = db.get_integration('subgram')['api_key']
     if not token: return False
-    headers = {"Auth": token}
-    payload = {"user_id": uid, "chat_id": uid, "max_sponsors": 10, "get_links": 1}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post("https://api.subgram.org/get-sponsors", json=payload, headers=headers, timeout=10) as r:
+            async with s.post("https://api.subgram.org/get-sponsors", json={"user_id": uid, "chat_id": uid, "max_sponsors": 10, "get_links": 1}, headers={"Auth": token}, timeout=10) as r:
                 if r.status == 200:
                     d = await r.json()
                     if d.get("status") == "ok": return True
@@ -206,28 +146,22 @@ async def sg_check(uid, tid):
 async def fl_get(uid):
     token = db.get_integration('flyer')['api_key']
     if not token: return None
-    headers = {"Content-Type": "application/json"}
-    payload = {"key": token, "user_id": uid}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post("https://api.flyerhubs.com/get_tasks", json=payload, headers=headers, timeout=10) as r:
+            async with s.post("https://api.flyerhubs.com/get_tasks", json={"key": token, "user_id": uid}, headers={"Content-Type": "application/json"}, timeout=10) as r:
                 if r.status == 200:
                     d = await r.json()
                     tasks = d.get("tasks", [])
-                    if tasks:
-                        t = tasks[0]
-                        return {"srv": "flyer", "tid": t["signature"], "link": t["link"]}
+                    if tasks: return {"srv": "flyer", "tid": tasks[0]["signature"], "link": tasks[0]["link"]}
         except Exception: pass
     return None
 
 async def fl_check(uid, tid):
     token = db.get_integration('flyer')['api_key']
     if not token: return False
-    headers = {"Content-Type": "application/json"}
-    payload = {"key": token, "user_id": uid, "signature": tid}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post("https://api.flyerhubs.com/check_task", json=payload, headers=headers, timeout=10) as r:
+            async with s.post("https://api.flyerhubs.com/check_task", json={"key": token, "user_id": uid, "signature": tid}, headers={"Content-Type": "application/json"}, timeout=10) as r:
                 if r.status == 200:
                     d = await r.json()
                     return d.get("status") == "completed"
@@ -235,35 +169,13 @@ async def fl_check(uid, tid):
     return False
 
 async def get_new_task(uid):
-    conn = db.get_conn()
-    srv = conn.execute("SELECT name FROM integrations WHERE status = 'on' AND role = 'tasks'").fetchall()
-    srv_names = [s['name'] for s in srv]
-    conn.close()
-    if "piarflow" in srv_names:
-        try:
-            t = await pf_get(uid)
-            if t: return t
-        except Exception: pass
-    if "tgrass" in srv_names:
-        try:
-            t = await tg_get(uid)
-            if t: return t
-        except Exception: pass
-    if "trafsly" in srv_names:
-        try:
-            t = await tr_get(uid)
-            if t: return t
-        except Exception: pass
-    if "subgram" in srv_names:
-        try:
-            t = await sg_get(uid)
-            if t: return t
-        except Exception: pass
-    if "flyer" in srv_names:
-        try:
-            t = await fl_get(uid)
-            if t: return t
-        except Exception: pass
+    with db.get_conn() as conn: srv_names = [s['name'] for s in conn.execute("SELECT name FROM integrations WHERE status = 'on' AND role = 'tasks'").fetchall()]
+    for srv in ["piarflow", "tgrass", "trafsly", "subgram", "flyer"]:
+        if srv in srv_names:
+            try:
+                t = await (pf_get(uid) if srv == "piarflow" else tg_get(uid) if srv == "tgrass" else tr_get(uid) if srv == "trafsly" else sg_get(uid) if srv == "subgram" else fl_get(uid))
+                if t: return t
+            except Exception: pass
     return None
 
 async def check_task_status(srv, uid, tid):
@@ -277,21 +189,17 @@ async def check_task_status(srv, uid, tid):
 async def get_bh_tasks(uid):
     try: entry_count = int(db.get_setting("botohub_entry_count"))
     except Exception: entry_count = 2
-    headers = {"Auth": BOTOHUB_TOKEN}
-    payload = {"user_id": uid, "chat_id": uid, "max_sponsors": entry_count}
     async with aiohttp.ClientSession() as s:
         try:
-            async with s.post(BOTOHUB_URL, json=payload, headers=headers, timeout=10) as r:
+            async with s.post(BOTOHUB_URL, json={"user_id": uid, "chat_id": uid, "max_sponsors": entry_count}, headers={"Auth": BOTOHUB_TOKEN}, timeout=10) as r:
                 if r.status == 200:
                     d = await r.json()
                     if d.get("status") == "ok": return None
-                    res = []
-                    for sp in d.get("sponsors", []):
-                        res.append({"id": sp.get("id"), "url": sp.get("link")})
-                    return res if res else None
+                    return [{"id": sp.get("id"), "url": sp.get("link")} for sp in d.get("sponsors", [])] or None
         except Exception: pass
     return None
-    # ================= СТАРТ И ОП =================
+
+# ================= START & TASKS =================
 @dp.message(CommandStart())
 async def start_cmd(message: Message, state: FSMContext):
     await state.clear()
@@ -314,40 +222,27 @@ async def start_cmd(message: Message, state: FSMContext):
         if ref_id:
             db.create_pending_referral(uid, ref_id)
             uname = "@" + message.from_user.username if message.from_user.username else "Пользователь"
-            try:
-                await bot.send_message(ref_id, '<tg-emoji emoji-id="5454096636957533398">⚡️</tg-emoji> <b>' + uname + '</b> присоединился по твоей ссылке!\n\nТы получишь <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji>, как только он подпишется на спонсоров.')
+            try: await bot.send_message(ref_id, f'⚡️ <b>{uname}</b> присоединился по твоей ссылке!\n\nТы получишь ⭐, как только он подпишется на спонсоров.')
             except Exception: pass
         if ad_code_val:
-            db.track_ad_click(ad_code_val)
-            db.set_user_ad_code(uid, ad_code_val)
-    else:
-        db.update_username(uid, message.from_user.username)
+            db.track_ad_click(ad_code_val); db.set_user_ad_code(uid, ad_code_val)
+    else: db.update_username(uid, message.from_user.username)
 
     if promo_code:
         ok, msg = db.activate_promo(promo_code, uid)
         if ok: await message.answer(msg)
 
     if db.get_setting("priv_enabled") == "1":
-        ptxt = db.get_setting("priv_text")
-        pmedia = db.get_setting("priv_media")
-        p_btns_json = db.get_setting("priv_buttons")
-        p_kb = None
-        if p_btns_json and p_btns_json != "[]":
-            try:
-                rows = json.loads(p_btns_json)
-                if rows: p_kb = kb.build_kb_from_rows(rows)
-            except Exception: pass
-
+        ptxt, pmedia, p_btns_json = db.get_setting("priv_text"), db.get_setting("priv_media"), db.get_setting("priv_buttons")
+        p_kb = kb.build_kb_from_rows(json.loads(p_btns_json)) if p_btns_json and p_btns_json != "[]" else None
         if pmedia:
-            if pmedia.startswith("photo:"):
-                await message.answer_photo(photo=pmedia.replace("photo:", ""), caption=ptxt, reply_markup=p_kb)
-            elif pmedia.startswith("video:"):
-                await message.answer_video(video=pmedia.replace("video:", ""), caption=ptxt, reply_markup=p_kb)
+            if pmedia.startswith("photo:"): await message.answer_photo(photo=pmedia.replace("photo:", ""), caption=ptxt, reply_markup=p_kb)
+            elif pmedia.startswith("video:"): await message.answer_video(video=pmedia.replace("video:", ""), caption=ptxt, reply_markup=p_kb)
             else: await message.answer(ptxt, reply_markup=p_kb)
         else: await message.answer(ptxt, reply_markup=p_kb)
         await asyncio.sleep(3)
 
-    if _integration_on("botohub", "op"):
+    if db.get_setting("botohub_enabled") == "1":
         op_tasks = await get_bh_tasks(uid)
         if op_tasks:
             kb_op = kb.op_screen_kb([(t.get('id', 0), "Подписаться", t['url'], False) for t in op_tasks])
@@ -364,24 +259,20 @@ async def finish_start(message: Message, uid: int):
         db.add_balance(ref, bns)
         u = db.get_user(uid)
         uname = "@" + u['username'] if u['username'] else "Пользователь"
-        try:
-            await bot.send_message(ref, '<tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji> Твой реферал <b>' + uname + '</b> подписался на спонсоров: <b>+' + fmt(bns) + ' <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji></b>')
+        try: await bot.send_message(ref, f'⭐ Твой реферал <b>{uname}</b> подписался на спонсоров: <b>+{fmt(bns)} ⭐</b>')
         except Exception: pass
     await send_main_menu(message)
 
 @dp.callback_query(F.data == "op_check")
 async def op_check_cb(call: CallbackQuery):
-    if not _integration_on("botohub", "op"):
-        await finish_start(call.message, call.from_user.id)
-        return await call.answer()
+    if db.get_setting("botohub_enabled") != "1": return await finish_start(call.message, call.from_user.id)
     op_tasks = await get_bh_tasks(call.from_user.id)
     if not op_tasks:
         try: await call.message.delete()
         except Exception: pass
         await finish_start(call.message, call.from_user.id)
         await call.answer()
-    else:
-        await call.answer("Вы подписались не на все каналы!", show_alert=True)
+    else: await call.answer("Вы подписались не на все каналы!", show_alert=True)
 
 async def send_main_menu(message: Message):
     t = safe_format(db.get_setting("menu_text"), ref_bonus=db.get_setting("ref_bonus"))
@@ -395,9 +286,9 @@ async def back_to_menu(call: CallbackQuery, state: FSMContext):
     await send_main_menu(call.message)
     await call.answer()
 
-# ================= ЗАДАНИЯ =================
 @dp.callback_query(F.data == "menu_earn")
-async def show_tasks(call: CallbackQuery):
+async def show_tasks(call: CallbackQuery, state: FSMContext):
+    await state.clear()
     try: await call.message.delete()
     except Exception: pass
     await send_next_task(call.message, call.from_user.id)
@@ -408,31 +299,12 @@ async def send_next_task(message: Message, uid: int):
         task = db.get_pending_task(uid)
         if not task:
             new_t = await get_new_task(uid)
-            if not new_t:
-                return await message.answer("😔 На данный момент нет доступных заданий.", reply_markup=kb.back_kb())
-            link = new_t.get("link")
-            if not link or not str(link).startswith("http"):
-                print(f"⚠️ ОШИБКА API: Сервис {new_t.get('srv')} вернул битую ссылку: {link}")
-                return await message.answer("😔 Ошибка на стороне сервиса заданий. Попробуйте позже.", reply_markup=kb.back_kb())
-            db.save_task(uid, new_t["srv"], new_t["tid"], link)
+            if not new_t: return await message.answer("😔 На данный момент нет доступных заданий.", reply_markup=kb.back_kb())
+            if not new_t.get("link") or not str(new_t["link"]).startswith("http"): return await message.answer("😔 Ошибка на стороне сервиса заданий.", reply_markup=kb.back_kb())
+            db.save_task(uid, new_t["srv"], new_t["tid"], new_t["link"])
             task = db.get_pending_task(uid)
-
-        t = safe_format(db.get_setting("task_text"), reward=db.get_setting("task_reward"))
-        markup = kb.task_kb(task["link"])
-        
-        banner = db.get_next_banner()
-        if banner:
-            if banner['caption']: t += "\n\n" + banner['caption']
-            style = banner['color'] if banner['color'] in ('primary', 'success', 'danger') else None
-            banner_btn = InlineKeyboardButton(text=banner['text'], url=banner['url'], style=style)
-            new_kb = [list(row) for row in markup.inline_keyboard]
-            new_kb.append([banner_btn])
-            markup = InlineKeyboardMarkup(inline_keyboard=new_kb)
-            
-        await message.answer(t, reply_markup=markup)
-    except Exception as e:
-        print(f"🚨 ОШИБКА ОТПРАВКИ ЗАДАНИЯ: {e}")
-        await message.answer("😔 Произошла ошибка при загрузке задания.", reply_markup=kb.back_kb())
+        await message.answer(safe_format(db.get_setting("task_text"), reward=db.get_setting("task_reward")), reply_markup=kb.task_kb(task["link"]))
+    except Exception as e: await message.answer("😔 Произошла ошибка при загрузке задания.", reply_markup=kb.back_kb())
 
 @dp.callback_query(F.data == "check_task")
 async def check_task_cb(call: CallbackQuery):
@@ -472,22 +344,14 @@ async def skip_task_cb(call: CallbackQuery):
     except Exception: pass
     await send_next_task(call.message, call.from_user.id)
 
-# ================= ПРОФИЛЬ, РЕФЕРАЛЫ, СТАТИСТИКА =================
+# ================= PROFILE, REFS, STATS, WITHDRAW =================
 @dp.callback_query(F.data == "menu_profile")
 async def menu_profile(call: CallbackQuery):
     try: await call.message.delete()
     except Exception: pass
     u = db.get_user(call.from_user.id)
     uname = "@" + u['username'] if u['username'] else "Юзер"
-    t = safe_format(
-        db.get_setting("profile_text"),
-        username=uname,
-        total_refs=db.get_pending_refs_count(u['user_id']) + db.get_confirmed_refs_count(u['user_id']),
-        total_earned=fmt(u['total_earned']),
-        balance=fmt(u['balance']),
-        user_id=u['user_id'],
-        tasks_completed=u['tasks_completed']
-    )
+    t = safe_format(db.get_setting("profile_text"), username=uname, total_refs=db.get_pending_refs_count(u['user_id']) + db.get_confirmed_refs_count(u['user_id']), total_earned=fmt(u['total_earned']), balance=fmt(u['balance']), user_id=u['user_id'], tasks_completed=u['tasks_completed'])
     await send_av(call.message, t, kb.back_kb())
 
 @dp.callback_query(F.data == "menu_refs")
@@ -496,26 +360,10 @@ async def menu_refs(call: CallbackQuery):
     except Exception: pass
     uid = call.from_user.id
     u = db.get_user(uid)
-    me = await bot.get_me()
-    link = f"https://t.me/{me.username}?start={uid}"
+    link = f"https://t.me/{(await bot.get_me()).username}?start={uid}"
     refs = db.get_user_referrals(uid)
-    
-    txt_refs = ""
-    for r in refs:
-        rname = "@" + r['username'] if r['username'] else "id" + str(r['user_id'])
-        status = "Ожидает" if r['status'] == 'pending' else "✅"
-        txt_refs += "├ " + rname + " — " + status + "\n"
-    if not txt_refs: txt_refs = "├ Пока никого нет\n"
-        
-    t = safe_format(
-        db.get_setting("ref_text"),
-        ref_bonus=db.get_setting("ref_bonus"),
-        ref_link=link,
-        total_refs=db.get_pending_refs_count(uid) + db.get_confirmed_refs_count(uid),
-        confirmed_refs=db.get_confirmed_refs_count(uid),
-        ref_list=txt_refs,
-        balance=fmt(u['balance'])
-    )
+    txt_refs = "".join([f"├ @{r['username'] if r['username'] else 'id'+str(r['user_id'])} — {'Ожидает' if r['status']=='pending' else '✅'}\n" for r in refs]) or "├ Пока никого нет\n"
+    t = safe_format(db.get_setting("ref_text"), ref_bonus=db.get_setting("ref_bonus"), ref_link=link, total_refs=db.get_pending_refs_count(uid) + db.get_confirmed_refs_count(uid), confirmed_refs=db.get_confirmed_refs_count(uid), ref_list=txt_refs, balance=fmt(u['balance']))
     await send_av(call.message, t, kb.back_kb())
 
 @dp.callback_query(F.data == "menu_instruction")
@@ -529,101 +377,71 @@ async def menu_stats(call: CallbackQuery):
     try: await call.message.delete()
     except Exception: pass
     s = db.get_stats()
-    t = safe_format(db.get_setting("stats_text"), total_users=s['total'], total_withdrawn=fmt(s['total_stars']))
-    await send_av(call.message, t, kb.stats_kb())
+    await send_av(call.message, safe_format(db.get_setting("stats_text"), total_users=s['total'], total_withdrawn=fmt(s['total_stars'])), kb.stats_kb())
 
 @dp.callback_query(F.data == "top_balance")
 async def top_balance(call: CallbackQuery):
     users = db.get_top_balance()
-    txt = "🏆 <b>Топ по балансу</b>\n\n"
-    for i, u in enumerate(users, 1):
-        uname = "@" + u['username'] if u['username'] else "id" + str(u['user_id'])
-        txt += f"{i}. {uname} — <b>{fmt(u['balance'])}</b> ⭐\n"
+    if not users: return await call.answer("🏆 В топе пока никого нет!", show_alert=True)
+    txt = "🏆 <b>Топ по балансу</b>\n\n" + "".join([f"{i}. @{u['username'] if u['username'] else 'id'+str(u['user_id'])} — <b>{fmt(u['balance'])}</b> ⭐\n" for i, u in enumerate(users, 1)])
     await call.message.edit_text(txt, reply_markup=kb.back_kb("menu_stats"))
 
 @dp.callback_query(F.data == "top_refs")
 async def top_refs(call: CallbackQuery):
     users = db.get_top_refs()
-    txt = "🏆 <b>Топ по рефералам</b>\n\n"
-    for i, u in enumerate(users, 1):
-        uname = "@" + u['username'] if u['username'] else "id" + str(u['user_id'])
-        txt += f"{i}. {uname} — <b>{u['refs']}</b> чел.\n"
+    if not users: return await call.answer("🏆 В топе пока никого нет!", show_alert=True)
+    txt = "🏆 <b>Топ по рефералам</b>\n\n" + "".join([f"{i}. @{u['username'] if u['username'] else 'id'+str(u['user_id'])} — <b>{u['refs']}</b> чел.\n" for i, u in enumerate(users, 1)])
     await call.message.edit_text(txt, reply_markup=kb.back_kb("menu_stats"))
 
 @dp.callback_query(F.data == "top_earn")
 async def top_earn(call: CallbackQuery):
-    with db.get_conn() as conn:
-        users = conn.execute("SELECT user_id, username, total_earned FROM users ORDER BY total_earned DESC LIMIT 10").fetchall()
-    txt = "🏆 <b>Топ по заработку</b>\n\n"
-    for i, u in enumerate(users, 1):
-        uname = "@" + u['username'] if u['username'] else "id" + str(u['user_id'])
-        txt += f"{i}. {uname} — <b>{fmt(u['total_earned'])}</b> ⭐\n"
+    with db.get_conn() as conn: users = conn.execute("SELECT user_id, username, total_earned FROM users ORDER BY total_earned DESC LIMIT 10").fetchall()
+    if not users: return await call.answer("🏆 В топе пока никого нет!", show_alert=True)
+    txt = "🏆 <b>Топ по заработку</b>\n\n" + "".join([f"{i}. @{u['username'] if u['username'] else 'id'+str(u['user_id'])} — <b>{fmt(u['total_earned'])}</b> ⭐\n" for i, u in enumerate(users, 1)])
     await call.message.edit_text(txt, reply_markup=kb.back_kb("menu_stats"))
 
-# ================= ВЫВОД =================
 @dp.callback_query(F.data == "menu_withdraw")
-async def menu_withdraw(call: CallbackQuery):
+async def menu_withdraw(call: CallbackQuery, state: FSMContext):
     try: await call.message.delete()
     except Exception: pass
     u = db.get_user(call.from_user.id)
-    req_friends = int(db.get_setting("withdraw_friends_required"))
-    conf_friends = db.get_confirmed_refs_count(u['user_id'])
-    
+    req = int(db.get_setting("withdraw_friends_required"))
+    conf = db.get_confirmed_refs_count(u['user_id'])
     t = safe_format(db.get_setting("withdraw_text"), balance=fmt(u['balance']), amounts=", ".join(map(str, WITHDRAW_AMOUNTS)))
-    if conf_friends < req_friends:
-        t += f"\n\n⚠️ <b>Внимание!</b> Для вывода нужно пригласить минимум <b>{req_friends}</b> друзей (у тебя {conf_friends})."
+    if conf < req: t += f"\n\n⚠️ <b>Внимание!</b> Для вывода нужно пригласить минимум <b>{req}</b> друзей (у тебя {conf})."
     await send_av(call.message, t, kb.withdraw_kb())
+    await state.set_state(UserStates.w_amount)
+
+async def do_withdraw(message: Message, amount: float):
+    u = db.get_user(message.from_user.id)
+    if round(u['balance'], 2) < amount: return await message.answer(f"❌ Не хватает звёзд. Баланс: {fmt(u['balance'])} ⭐")
+    req, conf = int(db.get_setting("withdraw_friends_required")), db.get_confirmed_refs_count(u['user_id'])
+    if conf < req: return await message.answer(f"❌ Нужно пригласить друзей: {req} (у вас {conf})")
+    wid = db.create_withdrawal(u['user_id'], amount)
+    await message.answer(f'✅ Заявка <b>#{wid}</b> на <b>{fmt(amount)}</b> ⭐ создана.\n\nСрок вывода: 5 минут — 24 часа.', reply_markup=kb.back_kb())
+    
+    with db.get_conn() as conn: refs = conn.execute("SELECT user_id, username FROM users WHERE referrer_id = ? AND passed_op = 1", (u['user_id'],)).fetchall()
+    refs_str = "".join([f"├ @{r['username'] if r['username'] else 'id'+str(r['user_id'])}\n" for r in refs]) or "├ Нет друзей\n"
+    admin_msg = f"💸 <b>Новая заявка на вывод #{wid}</b>\n\n👤 Пользователь: @{u['username'] or 'нет'} (<code>{u['user_id']}</code>)\n💰 Сумма: <b>{fmt(amount)}</b> ⭐\n👥 Рефералов: {conf}\n🎯 Заданий: {u['tasks_completed']}\n✅ Прошел ОП: {'✅ Да' if u['passed_op'] else '❌ Нет'}\n💵 Остаток: {fmt(u['balance'] - amount)} ⭐\n\n📊 <b>Кого он привел:</b>\n{refs_str}"
+    try: await bot.send_message(ADMIN_ID, admin_msg, reply_markup=kb.back_admin_kb())
+    except Exception: pass
+
+@dp.message(UserStates.w_amount)
+async def process_wd_text(message: Message, state: FSMContext):
+    try: amount = float(message.text.strip().replace(',', '.'))
+    except ValueError: return await message.answer("❌ Введи число (например: 15, 25, 50, 100) или нажми кнопку.")
+    if amount not in WITHDRAW_AMOUNTS: return await message.answer(f"❌ Неверная сумма. Доступно: {', '.join(map(str, WITHDRAW_AMOUNTS))}")
+    await state.clear()
+    await do_withdraw(message, amount)
 
 @dp.callback_query(F.data.regexp(r"^wd_\d+$"))
-async def process_wd(call: CallbackQuery):
-    amount = float(call.data.split("_")[1])
-    u = db.get_user(call.from_user.id)
-    
-    if amount not in WITHDRAW_AMOUNTS: return await call.answer("Неверная сумма", show_alert=True)
-    if round(u['balance'], 2) < amount: return await call.answer(f"Не хватает звёзд. Баланс: {fmt(u['balance'])} ⭐", show_alert=True)
-        
-    req = int(db.get_setting("withdraw_friends_required"))
-    conf_refs = db.get_confirmed_refs_count(u['user_id'])
-    if conf_refs < req: return await call.answer(f"Нужно пригласить друзей: {req} (у вас {conf_refs})", show_alert=True)
-    
-    try: wid = db.create_withdrawal(u['user_id'], amount)
-    except Exception as e:
-        print(f"ОШИБКА ВЫВОДА: {e}")
-        return await call.answer("Ошибка базы данных.", show_alert=True)
-        
+async def process_wd_btn(call: CallbackQuery, state: FSMContext):
+    await state.clear()
     try: await call.message.delete()
-    except: pass
-    
-    text = f'<tg-emoji emoji-id="5411197345968701560">✅</tg-emoji> Заявка <b>#{wid}</b> на <b>{fmt(amount)}</b> <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji> создана.\n\nСрок вывода: 5 минут — 24 часа.'
-    await call.message.answer(text, reply_markup=kb.back_kb())
+    except Exception: pass
+    await do_withdraw(call.message, float(call.data.split("_")[1]))
     await call.answer()
-    
-    op_status = "✅ Да" if u['passed_op'] else "❌ Нет"
-    uname_admin = "@" + u['username'] if u['username'] else "нет"
-    
-    conn = db.get_conn()
-    refs_list = conn.execute("SELECT user_id, username FROM users WHERE referrer_id = ? AND passed_op = 1", (u['user_id'],)).fetchall()
-    conn.close()
-    
-    refs_str = ""
-    for r in refs_list:
-        rname = "@" + r['username'] if r['username'] else "id" + str(r['user_id'])
-        refs_str += "├ " + rname + "\n"
-    if not refs_str: refs_str = "├ Нет друзей\n"
-    
-    admin_msg = (
-        f"💸 <b>Новая заявка на вывод #{wid}</b>\n\n"
-        f"👤 Пользователь: {uname_admin} (<code>{u['user_id']}</code>)\n"
-        f"💰 Сумма: <b>{fmt(amount)}</b> ⭐\n"
-        f"👥 Рефералов (засчитано): {conf_refs}\n"
-        f"🎯 Заданий: {u['tasks_completed']}\n"
-        f"✅ Прошел ОП: {op_status}\n"
-        f"💵 Остаток на балансе: {fmt(u['balance'] - amount)} ⭐\n\n"
-        f"📊 <b>Кого он привел:</b>\n{refs_str}"
-    )
-    try: await bot.send_message(ADMIN_ID, admin_msg, reply_markup=kb.back_admin_kb())
-    except Exception as e: print(f"Ошибка отправки уведомления админу: {e}")
-        # ================= АДМИНКА: БАЗА =================
+    # ================= АДМИН\КА: БАЗАn И СТАТИСТИКА =================З
 @dp.message(Command("admin"), IsAdminFilter())
 async def admin_cmd(message: Message, state: FSMContext):
     await state.clear()
@@ -644,13 +462,18 @@ async def admin_noop(call: CallbackQuery):
 @dp.callback_query(F.data == "stats", IsAdminFilter())
 async def admin_detailed_stats(c: CallbackQuery):
     s = db.get_stats()
-    txt = "📊 <b>Статистика бота</b>\n\n"
-    txt += "👥 Всего юзеров: <b>" + str(s['total']) + "</b>\n"
-    txt += "🆕 За сегодня: <b>" + str(s['today']) + "</b>\n"
-    txt += "💰 Общий баланс: <b>" + fmt(s['total_balance']) + "</b> ⭐\n\n"
-    txt += "📥 Заявок в ожидании: <b>" + str(s['pending']) + "</b>\n"
-    txt += "✅ Всего выведено: <b>" + str(s['done']) + "</b> заявок\n"
-    txt += "💸 Сумма выводов: <b>" + fmt(s['total_stars']) + "</b> ⭐"
+    txt = "📊 <b>МЕГА-СТАТИСТИКА БОТА</b>\n\n"
+    txt += "👥 <b>Пользователи:</b>\n"
+    txt += "├ Всего: <b>" + str(s['total']) + "</b>\n"
+    txt += "├ За сегодня: <b>" + str(s['today']) + "</b>\n"
+    txt += "└ Активных сегодня: <b>" + str(s['active_today']) + "</b>\n\n"
+    txt += "💰 <b>Экономика:</b>\n"
+    txt += "├ Заработано юзерами: <b>" + fmt(s['total_earned']) + "</b> ⭐\n"
+    txt += "├ Общий баланс: <b>" + fmt(s['total_balance']) + "</b> ⭐\n"
+    txt += "└ Заданий выполнено: <b>" + str(s['tasks']) + "</b>\n\n"
+    txt += "💸 <b>Выводы:</b>\n"
+    txt += "├ Ожидают: <b>" + str(s['pending']) + "</b> (на " + fmt(s['pending_stars']) + " ⭐)\n"
+    txt += "└ Выплачено: <b>" + str(s['done']) + "</b> (на " + fmt(s['total_stars']) + " ⭐)"
     await c.message.edit_text(txt, reply_markup=kb.back_admin_kb())
     await c.answer()
 
@@ -668,9 +491,7 @@ async def show_wd_page(call: CallbackQuery, idx: int):
     w = wds[idx]
     u = db.get_user(w['user_id'])
 
-    conn = db.get_conn()
-    refs_list = conn.execute("SELECT user_id, username FROM users WHERE referrer_id = ? AND passed_op = 1", (u['user_id'],)).fetchall()
-    conn.close()
+    with db.get_conn() as conn: refs_list = conn.execute("SELECT user_id, username FROM users WHERE referrer_id = ? AND passed_op = 1", (u['user_id'],)).fetchall()
 
     refs_str = ""
     for r in refs_list[:5]:
@@ -688,7 +509,6 @@ async def show_wd_page(call: CallbackQuery, idx: int):
     txt += "📅 Регистрация: " + reg_date + "\n\n"
     txt += "📊 <b>Аналитика (друзья):</b>\n" + refs_str
     txt += "└ Заданий: " + str(u['tasks_completed']) + " | Заработал: " + fmt(u['total_earned']) + " ⭐"
-    
     await call.message.edit_text(txt, reply_markup=kb.wd_page_kb(w['id'], idx, len(wds)))
 
 @dp.callback_query(F.data.startswith("wd_page:"), IsAdminFilter())
@@ -705,7 +525,7 @@ async def wd_ok(call: CallbackQuery):
     db.set_withdrawal_status(wid, 'completed')
     w = db.get_withdrawal(wid)
     if w:
-        msg = '<tg-emoji emoji-id="5411197345968701560">✅</tg-emoji> Заявка <b>#' + str(wid) + '</b> на <b>' + fmt(w["amount"]) + ' <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji></b> выплачена!'
+        msg = '✅ Заявка <b>#' + str(wid) + '</b> на <b>' + fmt(w["amount"]) + ' ⭐</b> выплачена!'
         try: await bot.send_message(w['user_id'], msg)
         except Exception: pass
     await call.answer("Одобрено!")
@@ -728,7 +548,7 @@ async def wd_accept_all(call: CallbackQuery):
     wds = db.get_pending_withdrawals()
     for w in wds:
         db.set_withdrawal_status(w['id'], 'completed')
-        msg = '<tg-emoji emoji-id="5411197345968701560">✅</tg-emoji> Заявка <b>#' + str(w["id"]) + '</b> на <b>' + fmt(w["amount"]) + ' <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji></b> выплачена!'
+        msg = '✅ Заявка <b>#' + str(w["id"]) + '</b> на <b>' + fmt(w["amount"]) + ' ⭐</b> выплачена!'
         try: await bot.send_message(w['user_id'], msg)
         except Exception: pass
     await call.message.edit_text("✅ Все заявки одобрены.", reply_markup=kb.back_admin_kb())
@@ -755,10 +575,8 @@ async def search_user(message: Message, state: FSMContext):
     u = db.get_user(int(q)) if q.isdigit() else db.get_user_by_username(q)
     if not u: return await message.answer("❌ Не найден.")
 
-    conn = db.get_conn()
-    refs_list = conn.execute("SELECT user_id, username FROM users WHERE referrer_id = ? AND passed_op = 1", (u['user_id'],)).fetchall()
-    conn.close()
-
+    with db.get_conn() as conn: refs_list = conn.execute("SELECT user_id, username FROM users WHERE referrer_id = ? AND passed_op = 1", (u['user_id'],)).fetchall()
+    
     refs_str = ""
     for r in refs_list[:5]:
         if r['username']: refs_str += "├ @" + r['username'] + "\n"
@@ -773,7 +591,6 @@ async def search_user(message: Message, state: FSMContext):
     t += "Баланс: <b>" + fmt(u['balance']) + "</b> ⭐\nЗаработал: <b>" + fmt(u['total_earned']) + "</b>\n"
     t += "Заданий: <b>" + str(u['tasks_completed']) + "</b>\n\n<b>Друзья:</b>\n" + refs_str
     t += "\nБан: " + ('Да' if u['is_banned'] else 'Нет')
-    
     await message.answer(t, reply_markup=kb.user_action_kb(u['user_id'], u['is_banned']))
     await state.clear()
 
@@ -784,11 +601,12 @@ async def user_ban(call: CallbackQuery):
     new_status = 0 if u['is_banned'] else 1
     db.toggle_ban(uid, new_status)
     await call.answer("Статус обновлен")
+    
     u2 = db.get_user(uid)
     reg = u2['registered_at'][:10] if u2['registered_at'] else "—"
     uname = "@" + u2['username'] if u2['username'] else "—"
     t = "👤 <b>Профиль</b>\nID: <code>" + str(u2['user_id']) + "</code>\nНик: " + uname + "\nРега: " + reg + "\n"
-    t += "Баланс: <b>" + fmt(u2['balance']) + "</b> ⭐\nЗаработал: <b>" + fmt(u2['total_earned']) + "</b>\n"
+    t += "Баланс: <b>" + fmt(u2['balance']) + "</b>аработал: <b>" + fmt(u2['total_earned']) + "</b>\n"
     t += "Заданий: <b>" + str(u2['tasks_completed']) + "</b>\n\nБан: " + ('Да' if u2['is_banned'] else 'Нет')
     try: await call.message.edit_text(t, reply_markup=kb.user_action_kb(uid, u2['is_banned']))
     except Exception: pass
@@ -836,15 +654,14 @@ async def promo_list(c: CallbackQuery):
     promos = db.get_all_promos()
     if not promos: return await c.message.edit_text("Нет промокодов.", reply_markup=kb.back_admin_kb())
     txt = "📜 <b>Список промокодов:</b>\n\n"
-    for p in promos:
-        txt += "<code>" + p['code'] + "</code> | " + str(p['amount']) + " ⭐ | " + str(p['used']) + "/" + str(p['max_uses']) + " | ОП: " + str(p['op_service'] or 'Нет') + "\n"
+    for p in promos: txt += "<code>" + p['code'] + "</code> | " + str(p['amount']) + " ⭐ | " + str(p['used']) + "/" + str(p['max_uses']) + "\n"
     await c.message.edit_text(txt, reply_markup=kb.back_admin_kb())
 
 @dp.callback_query(F.data == "promo_create", IsAdminFilter())
 async def promo_create(c: CallbackQuery, state: FSMContext):
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Обычный", callback_data="p_type:0"))
-    b.row(InlineKeyboardButton(text="С ОП", callback_data="p_type:1"))
+    b.row(InlineKeyboardButton(text="Обычный (просто звезды)", callback_data="p_type:0"))
+    b.row(InlineKeyboardButton(text="С ОП (задания)", callback_data="p_type:1"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="promos"))
     await c.message.edit_text("Выбери тип промокода:", reply_markup=b.as_markup())
 
@@ -869,7 +686,7 @@ async def promo_act(m: Message, state: FSMContext):
         d = await state.get_data()
         if d['is_op']:
             await state.update_data(selected_services=[])
-            await m.answer("Выбери сервисы, которые будут в ОП:", reply_markup=kb.promo_srv_kb([]))
+            await m.answer("Выбери сервисы для ОП:", reply_markup=kb.promo_srv_kb([]))
             await state.set_state(AdminStates.w_p_srv)
         else:
             code = "promo_" + str(random.randint(100000, 999999))
@@ -921,8 +738,7 @@ async def ad_list(c: CallbackQuery):
     ads = db.get_all_ads()
     if not ads: return await c.message.edit_text("Нет меток.", reply_markup=kb.back_admin_kb())
     txt = "📜 <b>Список меток:</b>\n\n"
-    for a in ads:
-        txt += "<code>" + a['code'] + "</code> | Кликов: " + str(a['clicks']) + " | Цена: " + str(a['price']) + "₽\nСтата: <code>/stat_" + a['code'] + "</code>\n\n"
+    for a in ads: txt += "<code>" + a['code'] + "</code> | Кликов: " + str(a['clicks']) + " | Цена: " + str(a['price']) + "₽\nСтата: <code>/stat_" + a['code'] + "</code>\n\n"
     await c.message.edit_text(txt, reply_markup=kb.back_admin_kb())
 
 @dp.callback_query(F.data == "ad_add", IsAdminFilter())
@@ -974,84 +790,23 @@ async def upd_stat(c: CallbackQuery):
 async def _build_ad_stat(code: str):
     src = db.get_ad_source(code)
     if not src: return None, None
-    conn = db.get_conn()
-    total_users = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ?", (code,)).fetchone()[0]
-    passed_op = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ? AND passed_op = 1", (code,)).fetchone()[0]
-    tasks = conn.execute("SELECT COUNT(*) FROM task_completed tc JOIN users u ON tc.user_id = u.user_id WHERE u.ad_code = ?", (code,)).fetchone()[0]
-    earned = conn.execute("SELECT SUM(balance) FROM users WHERE ad_code = ?", (code,)).fetchone()[0] or 0.0
-    withdrawn = conn.execute("SELECT SUM(amount) FROM withdrawals w JOIN users u ON w.user_id = u.user_id WHERE u.ad_code = ? AND w.status = 'completed'", (code,)).fetchone()[0] or 0.0
-    conn.close()
+    with db.get_conn() as conn:
+        total_users = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ?", (code,)).fetchone()[0]
+        passed_op = conn.execute("SELECT COUNT(*) FROM users WHERE ad_code = ? AND passed_op = 1", (code,)).fetchone()[0]
+        tasks = conn.execute("SELECT COUNT(*) FROM task_completed tc JOIN users u ON tc.user_id = u.user_id WHERE u.ad_code = ?", (code,)).fetchone()[0]
+        earned = conn.execute("SELECT SUM(balance) FROM users WHERE ad_code = ?", (code,)).fetchone()[0] or 0.0
+        withdrawn = conn.execute("SELECT SUM(amount) FROM withdrawals w JOIN users u ON w.user_id = u.user_id WHERE u.ad_code = ? AND w.status = 'completed'", (code,)).fetchone()[0] or 0.0
     
-    text = "📊 <b>Статистика метки: " + code + "</b>\n\n"
-    text += "👤 Переходов: <b>" + str(src['clicks']) + "</b>\n"
-    text += "🆕 Зарегалось: <b>" + str(total_users) + "</b>\n"
-    text += "✅ Прошли ОП: <b>" + str(passed_op) + "</b>\n"
-    text += "🎯 Заданий выполнено: <b>" + str(tasks) + "</b>\n"
-    text += "💰 Заработали: <b>" + fmt(earned) + "</b> ⭐\n"
-    text += "💸 Вывели: <b>" + fmt(withdrawn) + "</b> ⭐\n\n"
-    text += "💵 Цена перехода: <b>" + str(src['price']) + " ₽</b>\n"
-    text += "👤 Рекламодатель: <code>" + str(src['owner_id']) + "</code>"
+    text = "📊 <b>Статистика метки: " + code + "</b>\n\n👤 Переходов: <b>" + str(src['clicks']) + "</b>\n🆕 Зарегалось: <b>" + str(total_users) + "</b>\n✅ Прошли ОП: <b>" + str(passed_op) + "</b>\n🎯 Заданий: <b>" + str(tasks) + "</b>\n💰 Заработали: <b>" + fmt(earned) + "</b> ⭐\n💸 Вывели: <b>" + fmt(withdrawn) + "</b> ⭐\n\n💵 Цена: <b>" + str(src['price']) + " ₽</b>\n👤 Рекла: <code>" + str(src['owner_id']) + "</code>"
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="🔄 Обновить", callback_data="upd_stat:" + code))
     return text, b
-    # ================= ПАРСЕР МАССОВЫХ КНОПОК =================
-def parse_bulk_buttons(text: str):
-    color_map = {
-        'с': 'primary', 'синяя': 'primary', 'синий': 'primary',
-        'з': 'success', 'зеленая': 'success', 'зелёная': 'success',
-        'зеленый': 'success', 'зелёный': 'success',
-        'к': 'danger', 'красная': 'danger', 'красный': 'danger',
-        'о': 'None', 'обычная': 'None', 'обычный': 'None', 'без': 'None',
-        'none': 'None'
-    }
-
-    rows = []
-    for line in text.strip().split('\n'):
-        line = line.strip()
-        if not line: continue
-        buttons_in_line = []
-        parts = re.split(r'\s*&&\s*', line)
-        for part in parts:
-            part = part.strip()
-            if not part: continue
-            
-            match = re.match(r'^(.+)\s+-\s+(https?://\S+|action:\S+)\s+-\s+(\S+)$', part)
-            if not match:
-                return None, "Неверный формат: <code>" + part + "</code>\n\nФормат: <code>ТЕКСТ - ССЫЛКА - ЦВЕТ</code>"
-            
-            btn_text = match.group(1).strip()
-            btn_url = match.group(2).strip()
-            color_raw = match.group(3).strip().lower()
-
-            color = color_map.get(color_raw)
-            if color is None:
-                return None, "Неизвестный цвет: <code>" + color_raw + "</code>\n\nЦвета: <b>с</b> / <b>з</b> / <b>к</b> / <b>о</b>"
-
-            if len(btn_text) > 64:
-                return None, "Текст кнопки слишком длинный (макс 64): <code>" + btn_text[:30] + "...</code>"
-
-            buttons_in_line.append({"text": btn_text, "url": btn_url, "color": color})
-        if buttons_in_line:
-            rows.append(buttons_in_line)
-
-    if not rows: return None, "Пустой ввод. Отправь хотя бы одну кнопку."
-    return rows, None
-
-def normalize_button_rows(data):
-    if not data: return []
-    try: parsed = json.loads(data) if isinstance(data, str) else data
-    except Exception: return []
-    if not parsed: return []
-    if isinstance(parsed[0], dict): return [[btn] for btn in parsed]
-    return parsed
 
 # ================= АДМИНКА: АДМИНЫ =================
 @dp.callback_query(F.data == "admins_menu", IsAdminFilter())
 async def admins_menu(c: CallbackQuery):
     admins = db.get_admins()
-    txt = "👑 <b>Админы бота</b>\n\n"
-    txt += "Главный админ (из .env): <code>" + str(ADMIN_ID) + "</code>\nЕго нельзя удалить.\n\n"
-    txt += "Нажми на 🗑 у админа, чтобы удалить его.\n\n📋 <b>Список:</b>\n"
+    txt = "👑 <b>Админы бота</b>\n\nГлавный админ (из .env): <code>" + str(ADMIN_ID) + "</code>\nЕго нельзя удалить.\n\nНажми на 🗑 у админа, чтобы удалить его.\n\n📋 <b>Список:</b>\n"
     for a in admins:
         crown = "👑" if a["is_main"] else "•"
         name = "@" + a['username'] if a['username'] else "без_юзернейма"
@@ -1104,6 +859,36 @@ async def admin_del_do(c: CallbackQuery):
     uid = int(c.data.split(":")[1])
     db.remove_admin(uid)
     await admins_menu(c)
+    # ================= ПАРСЕР МАССОВЫХ КНОПОК =================
+def parse_bulk_buttons(text: str):
+    color_map = {'с': 'primary', 'синяя': 'primary', 'з': 'success', 'зеленая': 'success', 'зелёная': 'success', 'к': 'danger', 'красная': 'danger', 'о': 'None', 'обычная': 'None', 'none': 'None'}
+    rows = []
+    for line in text.strip().split('\n'):
+        line = line.strip()
+        if not line: continue
+        buttons_in_line = []
+        parts = re.split(r'\s*&&\s*', line)
+        for part in parts:
+            part = part.strip()
+            if not part: continue
+            match = re.match(r'^(.+)\s+-\s+(https?://\S+|action:\S+)\s+-\s+(\S+)$', part)
+            if not match: return None, "Неверный формат: <code>" + part + "</code>\n\nФормат: <code>ТЕКСТ - ССЫЛКА - ЦВЕТ</code>"
+            btn_text, btn_url, color_raw = match.group(1).strip(), match.group(2).strip(), match.group(3).strip().lower()
+            color = color_map.get(color_raw)
+            if color is None: return None, "Неизвестный цвет: <code>" + color_raw + "</code>\n\nЦвета: <b>с</b> / <b>з</b> / <b>к</b> / <b>о</b>"
+            if len(btn_text) > 64: return None, "Текст кнопки слишком длинный (макс 64): <code>" + btn_text[:30] + "...</code>"
+            buttons_in_line.append({"text": btn_text, "url": btn_url, "color": color})
+        if buttons_in_line: rows.append(buttons_in_line)
+    if not rows: return None, "Пустой ввод. Отправь хотя бы одну кнопку."
+    return rows, None
+
+def normalize_button_rows(data):
+    if not data: return []
+    try: parsed = json.loads(data) if isinstance(data, str) else data
+    except Exception: return []
+    if not parsed: return []
+    if isinstance(parsed[0], dict): return [[btn] for btn in parsed]
+    return parsed
 
 # ================= АДМИНКА: ПРИВАТКА =================
 @dp.callback_query(F.data == "priv_menu", IsAdminFilter())
@@ -1144,7 +929,6 @@ async def priv_edit_media(c: CallbackQuery, state: FSMContext):
 async def priv_menu_btns(c: CallbackQuery):
     rows = normalize_button_rows(db.get_setting("priv_buttons") or "[]")
     total_btns = sum(len(r) for r in rows)
-
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="➕ Добавить кнопки", callback_data="priv_add_btn", style="success"))
     if rows: b.row(InlineKeyboardButton(text="🗑 Очистить все", callback_data="priv_clear_btns", style="danger"))
@@ -1157,7 +941,6 @@ async def priv_menu_btns(c: CallbackQuery):
             line = " | ".join([btn['text'] + " [" + str(btn.get('color', 'None')) + "]" for btn in row])
             txt += "Ряд " + str(i) + ": " + line + "\n"
         txt += "\n"
-
     txt += "<b>Формат ввода:</b>\n<code>Текст - https://url - с</code>\n<code>Текст2 - action:menu_earn - з && Текст3 - https://url3 - к</code>\n\n<b>&&</b> = кнопки в одном ряду, <b>энтер</b> = новый ряд.\n\nЦвета: <b>с</b> (синяя), <b>з</b> (зелёная), <b>к</b> (красная), <b>о</b> (обычная)"
     await c.message.edit_text(txt, reply_markup=b.as_markup())
     await c.answer()
@@ -1169,7 +952,7 @@ async def priv_clear_btns(c: CallbackQuery):
 
 @dp.callback_query(F.data == "priv_add_btn", IsAdminFilter())
 async def priv_add_btn(c: CallbackQuery, state: FSMContext):
-    await c.message.edit_text("Отправь кнопки в формате:\n\n<code>Текст - https://url - с</code>\n<code>Текст2 - action:menu_earn - з && Текст3 - https://url3 - к</code>\n\n<b>&&</b> = кнопки в одном ряду, <b>энтер</b> = новый ряд.\n\nЦвета: <b>с</b> (синяя), <b>з</b> (зелёная), <b>к</b> (красная), <b>о</b> (обычная)", reply_markup=kb.back_admin_kb())
+    await c.message.edit_text("Отправь кнопки в формате:\n\n<code>Текст - https://url - с</code>\n<code>Текст2 - action:menu_earn - з && Текст3 - https://url3 - к</code>\n\n<b>&&</b> = в ряд, <b>энтер</b> = новый ряд.\n\nЦвета: <b>с</b>, <b>з</b>, <b>к</b>, <b>о</b>", reply_markup=kb.back_admin_kb())
     await state.set_state(AdminStates.w_priv_btn_bulk)
 
 @dp.message(AdminStates.w_priv_btn_bulk, IsAdminFilter())
@@ -1192,11 +975,10 @@ async def bc_menu(c: CallbackQuery):
     b.row(InlineKeyboardButton(text="✏️ Текст", callback_data="bc_edit_text"))
     b.row(InlineKeyboardButton(text="📎 Медиа", callback_data="bc_edit_media"))
     b.row(InlineKeyboardButton(text="🔗 Кнопки (" + str(total_btns) + ")", callback_data="bc_edit_btns"))
-    b.row(InlineKeyboardButton(text="🔢 Лимит юзеров", callback_data="bc_edit_limit"))
     b.row(InlineKeyboardButton(text="👁 Предпросмотр", callback_data="bc_preview"))
     b.row(InlineKeyboardButton(text="✅ Отправить", callback_data="bc_start", style="success"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    await c.message.edit_text("📢 <b>Умная рассылка</b>\n\nТекст: " + ('✅' if BC_STATE.get('text') else '❌') + "\nМедиа: " + ('✅' if BC_STATE.get('media') else '❌') + "\nКнопок: " + str(total_btns) + "\nЛимит: " + str(BC_STATE.get('limit') if BC_STATE.get('limit') else 'все'), reply_markup=b.as_markup())
+    await c.message.edit_text("📢 <b>Умная рассылка</b>\n\nТекст: " + ('✅' if BC_STATE.get('text') else '❌') + "\nМедиа: " + ('✅' if BC_STATE.get('media') else '❌') + "\nКнопок: " + str(total_btns), reply_markup=b.as_markup())
     await c.answer()
 
 @dp.callback_query(F.data == "bc_edit_text", IsAdminFilter())
@@ -1217,12 +999,8 @@ async def bc_edit_media(c: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminStates.w_bc_media, IsAdminFilter())
 async def bc_save_media(m: Message, state: FSMContext):
-    if m.photo:
-        BC_STATE['media'] = m.photo[-1].file_id
-        BC_STATE['media_type'] = 'photo'
-    elif m.video:
-        BC_STATE['media'] = m.video.file_id
-        BC_STATE['media_type'] = 'video'
+    if m.photo: BC_STATE['media'] = m.photo[-1].file_id; BC_STATE['media_type'] = 'photo'
+    elif m.video: BC_STATE['media'] = m.video.file_id; BC_STATE['media_type'] = 'video'
     else: return await m.answer("Нужно фото или видео.")
     await state.clear()
     await m.answer("✅ Медиа сохранено!", reply_markup=kb.back_admin_kb())
@@ -1242,8 +1020,7 @@ async def bc_edit_btns(c: CallbackQuery):
             line = " | ".join([btn['text'] + " [" + str(btn.get('color', 'None')) + "]" for btn in row])
             txt += "Ряд " + str(i) + ": " + line + "\n"
         txt += "\n"
-
-    txt += "<b>Формат ввода:</b>\n<code>Текст - https://url - с</code>\n<code>Текст2 - action:menu_earn - з && Текст3 - https://url3 - к</code>\n\n<b>&&</b> = кнопки в одном ряду, <b>энтер</b> = новый ряд.\n\nЦвета: <b>с</b> (синяя), <b>з</b> (зелёная), <b>к</b> (красная), <b>о</b> (обычная)"
+    txt += "<b>Формат ввода:</b>\n<code>Текст - https://url - с</code>\n<code>Текст2 - action:menu_earn - з && Текст3 - https://url3 - к</code>\n\n<b>&&</b> = в ряд, <b>энтер</b> = новый ряд.\n\nЦвета: <b>с</b>, <b>з</b>, <b>к</b>, <b>о</b>"
     await c.message.edit_text(txt, reply_markup=b.as_markup())
     await c.answer()
 
@@ -1255,7 +1032,7 @@ async def bc_clear_btns(c: CallbackQuery):
 
 @dp.callback_query(F.data == "bc_add_btn", IsAdminFilter())
 async def bc_add_btn(c: CallbackQuery, state: FSMContext):
-    await c.message.edit_text("Отправь кнопки в формате:\n\n<code>Текст - https://url - с</code>\n<code>Текст2 - action:menu_earn - з && Текст3 - https://url3 - к</code>\n\n<b>&&</b> = кнопки в одном ряду, <b>энтер</b> = новый ряд.\n\nЦвета: <b>с</b> (синяя), <b>з</b> (зелёная), <b>к</b> (красная), <b>о</b> (обычная)", reply_markup=kb.back_admin_kb())
+    await c.message.edit_text("Отправь кнопки в формате:\n\n<code>Текст - https://url - с</code>\n<code>Текст2 - action:menu_earn - з && Текст3 - https://url3 - к</code>\n\n<b>&&</b> = в ряд, <b>энтер</b> = новый ряд.\n\nЦвета: <b>с</b>, <b>з</b>, <b>к</b>, <b>о</b>", reply_markup=kb.back_admin_kb())
     await state.set_state(AdminStates.w_bc_btn_bulk)
 
 @dp.message(AdminStates.w_bc_btn_bulk, IsAdminFilter())
@@ -1266,19 +1043,6 @@ async def bc_btn_bulk_save(m: Message, state: FSMContext):
     BC_STATE['buttons'].extend(rows)
     await state.clear()
     await m.answer("✅ Добавлено " + str(len(rows)) + " ряд(ов) кнопок в рассылку!", reply_markup=kb.back_admin_kb())
-
-@dp.callback_query(F.data == "bc_edit_limit", IsAdminFilter())
-async def bc_edit_limit(c: CallbackQuery, state: FSMContext):
-    await c.message.edit_text("Сколько юзеров обработать? (0 = все):", reply_markup=kb.back_admin_kb())
-    await state.set_state(AdminStates.w_bc_limit)
-
-@dp.message(AdminStates.w_bc_limit, IsAdminFilter())
-async def bc_save_limit(m: Message, state: FSMContext):
-    try:
-        BC_STATE['limit'] = int(m.text)
-        await state.clear()
-        await m.answer("✅ Лимит: " + str(BC_STATE['limit']), reply_markup=kb.back_admin_kb())
-    except Exception: await m.answer("Ошибка. Введи число.")
 
 @dp.callback_query(F.data == "bc_preview", IsAdminFilter())
 async def bc_preview(c: CallbackQuery):
@@ -1296,17 +1060,10 @@ async def bc_preview(c: CallbackQuery):
 @dp.callback_query(F.data == "bc_start", IsAdminFilter())
 async def bc_start(c: CallbackQuery):
     if not BC_STATE.get('text') and not BC_STATE.get('media'): return await c.answer("Сначала задай текст или медиа!", show_alert=True)
-    conn = db.get_conn()
-    users = conn.execute("SELECT user_id FROM users").fetchall()
-    conn.close()
-
-    limit = BC_STATE.get('limit', 0)
-    if limit > 0: users = users[:limit]
-
+    with db.get_conn() as conn: users = conn.execute("SELECT user_id FROM users").fetchall()
+    
     await c.message.edit_text("⏳ Рассылка для " + str(len(users)) + " юзеров...")
-    text = BC_STATE.get('text', '')
-    media = BC_STATE.get('media')
-    mtype = BC_STATE.get('media_type')
+    text, media, mtype = BC_STATE.get('text', ''), BC_STATE.get('media'), BC_STATE.get('media_type')
     markup = kb.build_kb_from_rows(BC_STATE.get('buttons', []))
 
     ok, err = 0, 0
@@ -1323,62 +1080,8 @@ async def bc_start(c: CallbackQuery):
     await c.message.answer("✅ Готово.\nУспешно: " + str(ok) + "\nОшибок: " + str(err), reply_markup=kb.back_admin_kb())
     BC_STATE.clear()
     BC_STATE.update({"text": "", "media": None, "media_type": None, "limit": 0, "buttons": []})
-    # ================= АДМИНКА: ИНТЕГРАЦИИ =================
-@dp.callback_query(F.data == "tasks_menu", IsAdminFilter())
-async def admin_ints(call: CallbackQuery):
-    b = InlineKeyboardBuilder()
-    for i in db.get_all_integrations():
-        s = "🟢" if i['status'] == 'on' else "🔴"
-        role_text = 'ОП' if i['role'] == 'op' else 'Задания'
-        b.row(InlineKeyboardButton(text=s + " " + i['name'].upper() + " (" + role_text + ")", callback_data="int_view:" + i['name']))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    await call.message.edit_text("🔌 <b>Интеграции и Сервисы</b>\nНастрой API и роли:", reply_markup=b.as_markup())
-    await call.answer()
 
-@dp.callback_query(F.data.startswith("int_view:"), IsAdminFilter())
-async def int_view(call: CallbackQuery):
-    n = call.data.split(":")[1]
-    i = db.get_integration(n)
-    b = InlineKeyboardBuilder()
-    btn_status = "🔴 Выкл" if i['status'] == 'on' else "🟢 Вкл"
-    b.row(InlineKeyboardButton(text=btn_status, callback_data="int_toggle:" + n))
-    b.row(InlineKeyboardButton(text="Сменить роль (ОП/Задания)", callback_data="int_role:" + n))
-    b.row(InlineKeyboardButton(text="🔑 Сменить API Ключ", callback_data="int_key:" + n))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="tasks_menu"))
-    
-    txt = "⚙️ <b>" + n.upper() + "</b>\nРоль: " + i['role'] + "\nКлюч: " + (i['api_key'] or 'По умолчанию')
-    await call.message.edit_text(txt, reply_markup=b.as_markup())
-    await call.answer()
-
-@dp.callback_query(F.data.startswith("int_toggle:"), IsAdminFilter())
-async def int_toggle(call: CallbackQuery):
-    n = call.data.split(":")[1]
-    i = db.get_integration(n)
-    db.toggle_integration(n, 'off' if i['status'] == 'on' else 'on')
-    await int_view(call)
-
-@dp.callback_query(F.data.startswith("int_role:"), IsAdminFilter())
-async def int_role(call: CallbackQuery):
-    n = call.data.split(":")[1]
-    i = db.get_integration(n)
-    db.set_integration_role(n, 'tasks' if i['role'] == 'op' else 'op')
-    await int_view(call)
-
-@dp.callback_query(F.data.startswith("int_key:"), IsAdminFilter())
-async def int_key(call: CallbackQuery, state: FSMContext):
-    n = call.data.split(":")[1]
-    await state.update_data(int_name=n)
-    await call.message.edit_text("Введи ключ для " + n.upper() + ":", reply_markup=kb.back_admin_kb())
-    await state.set_state(AdminStates.w_int_key)
-
-@dp.message(AdminStates.w_int_key, IsAdminFilter())
-async def save_int_key(message: Message, state: FSMContext):
-    d = await state.get_data()
-    db.update_integration_key(d['int_name'], message.text.strip())
-    await state.clear()
-    await message.answer("✅ Ключ сохранен!", reply_markup=kb.back_admin_kb())
-
-# ================= АДМИНКА: НАСТРОЙКИ =================
+# ================= АДМИНКА: НАСТРОЙКИ, ИНТЕГРАЦИИ, ОП =================
 @dp.callback_query(F.data == "settings", IsAdminFilter())
 async def admin_settings(c: CallbackQuery):
     await c.message.edit_text("⚙️ <b>Настройки</b>", reply_markup=kb.settings_kb())
@@ -1401,23 +1104,15 @@ async def save_set(m: Message, state: FSMContext):
         db.set_setting(d['set_key'], val)
         await m.answer("✅ Медиа сохранено!", reply_markup=kb.back_admin_kb())
     else:
-        if d['set_key'] == "notify_add":
-            texts = json.loads(db.get_setting("notify_texts") or "[]")
-            texts.append(m.html_text.strip())
-            db.set_setting("notify_texts", json.dumps(texts))
-            await m.answer("✅ Текст добавлен в пул уведомлений!", reply_markup=kb.back_admin_kb())
-        else:
-            db.set_setting(d['set_key'], m.html_text.strip())
-            await m.answer("✅ Настройка сохранена!", reply_markup=kb.back_admin_kb())
+        db.set_setting(d['set_key'], m.html_text.strip())
+        await m.answer("✅ Настройка сохранена!", reply_markup=kb.back_admin_kb())
     await state.clear()
 
-# ================= АДМИНКА: ОП (BOTOHUB) НАСТРОЙКИ =================
 @dp.callback_query(F.data == "bh_menu", IsAdminFilter())
 async def admin_bh(c: CallbackQuery):
     en = db.get_setting("botohub_enabled") == "1"
     status = '🟢 Вкл' if en else '🔴 Выкл'
-    txt = "🎯 <b>ОП (Botohub)</b>\n\nСтатус: " + status + "\nКол-во на входе: <b>" + str(db.get_setting('botohub_entry_count')) + "</b>"
-    await c.message.edit_text(txt, reply_markup=kb.bh_kb(en))
+    await c.message.edit_text("🎯 <b>ОП (Botohub)</b>\n\nСтатус: " + status + "\nКол-во на входе: <b>" + str(db.get_setting('botohub_entry_count')) + "</b>", reply_markup=kb.bh_kb(en))
     await c.answer()
 
 @dp.callback_query(F.data == "bh_toggle", IsAdminFilter())
@@ -1438,207 +1133,173 @@ async def bh_edit_entry(c: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.w_set_val)
     await state.update_data(set_key="botohub_entry_count", is_media=False)
 
-# ================= АДМИНКА: УВЕДОМЛЕНИЯ =================
+@dp.callback_query(F.data == "tasks_menu", IsAdminFilter())
+async def admin_ints(call: CallbackQuery):
+    b = InlineKeyboardBuilder()
+    for i in db.get_all_integrations():
+        s = "🟢" if i['status'] == 'on' else "🔴"
+        b.row(InlineKeyboardButton(text=s + " " + i['name'].upper() + " (" + ('ОП' if i['role'] == 'op' else 'Задания') + ")", callback_data="int_view:" + i['name']))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
+    await call.message.edit_text("🔌 <b>Интеграции и Сервисы</b>:", reply_markup=b.as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("int_view:"), IsAdminFilter())
+async def int_view(call: CallbackQuery):
+    n = call.data.split(":")[1]
+    i = db.get_integration(n)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="🔴 Выкл" if i['status'] == 'on' else "🟢 Вкл", callback_data="int_toggle:" + n))
+    b.row(InlineKeyboardButton(text="Сменить роль", callback_data="int_role:" + n))
+    b.row(InlineKeyboardButton(text="🔑 Ключ", callback_data="int_key:" + n))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="tasks_menu"))
+    await call.message.edit_text("⚙️ <b>" + n.upper() + "</b>\nРоль: " + i['role'] + "\nКлюч: " + (i['api_key'] or 'По умолчанию'), reply_markup=b.as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("int_toggle:"), IsAdminFilter())
+async def int_toggle(call: CallbackQuery):
+    n = call.data.split(":")[1]; i = db.get_integration(n)
+    db.toggle_integration(n, 'off' if i['status'] == 'on' else 'on'); await int_view(call)
+
+@dp.callback_query(F.data.startswith("int_role:"), IsAdminFilter())
+async def int_role(call: CallbackQuery):
+    n = call.data.split(":")[1]; i = db.get_integration(n)
+    db.set_integration_role(n, 'tasks' if i['role'] == 'op' else 'op'); await int_view(call)
+
+@dp.callback_query(F.data.startswith("int_key:"), IsAdminFilter())
+async def int_key(call: CallbackQuery, state: FSMContext):
+    n = call.data.split(":")[1]
+    await state.update_data(int_name=n)
+    await call.message.edit_text("Введи ключ для " + n.upper() + ":", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_int_key)
+
+@dp.message(AdminStates.w_int_key, IsAdminFilter())
+async def save_int_key(message: Message, state: FSMContext):
+    d = await state.get_data()
+    db.update_integration_key(d['int_name'], message.text.strip())
+    await state.clear()
+    await message.answer("✅ Ключ сохранен!", reply_markup=kb.back_admin_kb())
+
+# ================= АДМИНКА: НОВЫЕ УВЕДОМЛЕНИЯ =================
 @dp.callback_query(F.data == "admin_notify", IsAdminFilter())
 async def admin_notify(c: CallbackQuery):
-    status = "🟢 Включены" if db.get_setting("notify_enabled") == "1" else "🔴 Выключены"
-    interval = db.get_setting("notify_interval")
-    texts = json.loads(db.get_setting("notify_texts") or "[]")
+    await c.message.edit_text("🔔 <b>Авто-уведомления</b>\n\nЗдесь ты можешь создать уведомления с медиа, кнопками и своим интервалом. Бот будет отправлять их сам в фоне.", reply_markup=kb.sched_notifs_menu_kb())
+    await c.answer()
 
+@dp.callback_query(F.data == "sched_list", IsAdminFilter())
+async def sched_list(c: CallbackQuery):
+    with db.get_conn() as conn: notifs = conn.execute("SELECT * FROM scheduled_notifs").fetchall()
+    if not notifs: return await c.message.edit_text("Список пуст.", reply_markup=kb.sched_notifs_menu_kb())
+    txt = "📋 <b>Твои уведомления:</b>\n\n"
     b = InlineKeyboardBuilder()
-    btn_toggle = "🔴 Выкл" if db.get_setting("notify_enabled") == "1" else "🟢 Вкл"
-    b.row(InlineKeyboardButton(text=btn_toggle, callback_data="notify_toggle"))
-    b.row(InlineKeyboardButton(text="➕ Добавить текст", callback_data="notify_add_text"))
-    b.row(InlineKeyboardButton(text="📋 Список текстов", callback_data="notify_list"))
-    b.row(InlineKeyboardButton(text="⏱ Интервал: " + str(interval) + " ч.", callback_data="notify_edit_interval"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
-    
-    txt = "🔔 <b>Уведомления о заданиях</b>\n\nСтатус: " + status + "\nТекстов в пуле: " + str(len(texts)) + "\n\n<i>Если пул пуст, используется стандартный текст.</i>"
+    for n in notifs:
+        short_txt = n['text'][:20] + "..." if n['text'] else "Медиа"
+        txt += "#" + str(n['id']) + " | Раз в " + str(n['interval_hours']) + " ч. | " + short_txt + "\n"
+        b.row(InlineKeyboardButton(text="🗑 Удалить #" + str(n['id']), callback_data="sched_del:" + str(n['id']), style="danger"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_notify"))
     await c.message.edit_text(txt, reply_markup=b.as_markup())
     await c.answer()
 
-@dp.callback_query(F.data == "notify_toggle", IsAdminFilter())
-async def notify_toggle(c: CallbackQuery):
-    cur = db.get_setting("notify_enabled")
-    db.set_setting("notify_enabled", "0" if cur == "1" else "1")
-    await admin_notify(c)
+@dp.callback_query(F.data.startswith("sched_del:"), IsAdminFilter())
+async def sched_del(c: CallbackQuery):
+    nid = int(c.data.split(":")[1])
+    with db.get_conn() as conn: conn.execute("DELETE FROM scheduled_notifs WHERE id = ?", (nid,)); conn.commit()
+    await sched_list(c)
 
-@dp.callback_query(F.data == "notify_add_text", IsAdminFilter())
-async def notify_add_text(c: CallbackQuery, state: FSMContext):
-    await c.message.edit_text("Отправь новый текст уведомления (используй {reward}):", reply_markup=kb.back_admin_kb())
-    await state.set_state(AdminStates.w_set_val)
-    await state.update_data(set_key="notify_add", is_media=False)
+@dp.callback_query(F.data == "sched_add", IsAdminFilter())
+async def sched_add(c: CallbackQuery, state: FSMContext):
+    await state.update_data(sn_text="", sn_media="", sn_media_type="", sn_buttons=[])
+    await c.message.edit_text("Отправь текст уведомления (или напиши /skip, если только медиа):", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_sn_text)
 
-@dp.callback_query(F.data == "notify_edit_interval", IsAdminFilter())
-async def notify_edit_interval(c: CallbackQuery, state: FSMContext):
-    await c.message.edit_text("Введи интервал в часах (например 12):", reply_markup=kb.back_admin_kb())
-    await state.set_state(AdminStates.w_set_val)
-    await state.update_data(set_key="notify_interval", is_media=False)
+@dp.message(AdminStates.w_sn_text, IsAdminFilter())
+async def sched_text(m: Message, state: FSMContext):
+    if m.text != "/skip": await state.update_data(sn_text=m.html_text)
+    await m.answer("Отправь фото/видео (или /skip):")
+    await state.set_state(AdminStates.w_sn_media)
 
-@dp.callback_query(F.data == "notify_list", IsAdminFilter())
-async def notify_list(c: CallbackQuery):
-    texts = json.loads(db.get_setting("notify_texts") or "[]")
-    if not texts: return await c.message.edit_text("Список текстов пуст.", reply_markup=kb.back_admin_kb())
-    
-    txt = "📜 <b>Тексты уведомлений:</b>\n\n"
-    for i, t in enumerate(texts):
-        txt += str(i+1) + ". " + t + "\n\n"
-        
-    await c.message.edit_text(txt, reply_markup=kb.notify_list_kb(texts))
-    await c.answer()
+@dp.message(AdminStates.w_sn_media, IsAdminFilter())
+async def sched_media(m: Message, state: FSMContext):
+    if m.photo: await state.update_data(sn_media=m.photo[-1].file_id, sn_media_type="photo")
+    elif m.video: await state.update_data(sn_media=m.video.file_id, sn_media_type="video")
+    elif m.text != "/skip": return await m.answer("Нужно фото/видео или /skip")
+    await m.answer("Отправь кнопки:\n<code>Текст - https://url - с</code>\n(или /skip):")
+    await state.set_state(AdminStates.w_sn_btn)
 
-@dp.callback_query(F.data.startswith("notify_del:"), IsAdminFilter())
-async def notify_del(c: CallbackQuery):
-    idx = int(c.data.split(":")[1])
-    texts = json.loads(db.get_setting("notify_texts") or "[]")
-    if 0 <= idx < len(texts):
-        texts.pop(idx)
-        db.set_setting("notify_texts", json.dumps(texts))
-    await c.answer("Текст удален")
-    await notify_list(c)
+@dp.message(AdminStates.w_sn_btn, IsAdminFilter())
+async def sched_btn(m: Message, state: FSMContext):
+    if m.text != "/skip":
+        rows, err = parse_bulk_buttons(m.text)
+        if err: return await m.answer("❌ " + err)
+        await state.update_data(sn_buttons=rows)
+    await m.answer("Введи интервал в часах (например: 2, 6, 24):")
+    await state.set_state(AdminStates.w_sn_interval)
+
+@dp.message(AdminStates.w_sn_interval, IsAdminFilter())
+async def sched_interval(m: Message, state: FSMContext):
+    try:
+        hours = int(m.text)
+        d = await state.get_data()
+        with db.get_conn() as conn:
+            conn.execute("INSERT INTO scheduled_notifs (text, media, media_type, buttons, interval_hours) VALUES (?, ?, ?, ?, ?)", (d['sn_text'], d['sn_media'], d['sn_media_type'], json.dumps(d['sn_buttons']), hours))
+            conn.commit()
+        await state.clear()
+        await m.answer("✅ Уведомление добавлено! Оно будет отправляться автоматически.", reply_markup=kb.back_admin_kb())
+    except ValueError: await m.answer("Ошибка. Введи число.")
 
 # ================= АДМИНКА: БЭКАП =================
 @dp.callback_query(F.data == "backup_help", IsAdminFilter())
 async def admin_backup(c: CallbackQuery):
     try:
         filename = "backup_" + datetime.now().strftime('%d_%m_%Y_%H_%M') + ".db"
-        doc = FSInputFile(DB, filename=filename)
-        await c.message.answer_document(doc, caption="💾 Бэкап БД от " + datetime.now().strftime('%d.%m.%Y %H:%M'))
-    except Exception as e:
-        await c.message.answer("Ошибка бэкапа: " + str(e))
+        await c.message.answer_document(FSInputFile(DB, filename=filename), caption="💾 Бэкап БД от " + datetime.now().strftime('%d.%m.%Y %H:%M'))
+    except Exception as e: await c.message.answer("Ошибка бэкапа: " + str(e))
     await c.answer()
 
 async def daily_backup_worker():
     while True:
         try:
             now = datetime.now()
-            targets = [
-                now.replace(hour=8, minute=0, second=0, microsecond=0),
-                now.replace(hour=20, minute=0, second=0, microsecond=0)
-            ]
+            targets = [now.replace(hour=8, minute=0, second=0, microsecond=0), now.replace(hour=20, minute=0, second=0, microsecond=0)]
             next_run = next((t for t in targets if t > now), targets[0] + timedelta(days=1))
             await asyncio.sleep((next_run - now).total_seconds())
-            doc = FSInputFile(DB)
-            await bot.send_document(ADMIN_ID, doc, caption="📦 <b>Авто-бэкап</b>\n" + datetime.now().strftime('%d.%m.%Y %H:%M'))
+            await bot.send_document(ADMIN_ID, FSInputFile(DB), caption="📦 <b>Авто-бэкап</b>\n" + datetime.now().strftime('%d.%m.%Y %H:%M'))
         except Exception as e:
-            print("Ошибка бэкапа: " + str(e))
-            await asyncio.sleep(3600)
-            # ================= АДМИНКА: БАННЕРЫ (ПОКАЗЫ) =================
-@dp.callback_query(F.data == "banners_menu", IsAdminFilter())
-async def admin_banners(c: CallbackQuery):
-    await c.message.edit_text(
-        "🖼 <b>Показы (Рекламные баннеры)</b>\n\n"
-        "Эти баннеры будут автоматически добавляться внизу всех меню и кнопок бота и переключаться по кругу (1 -> 2 -> 3 -> 1...).",
-        reply_markup=kb.banners_menu_kb()
-    )
-    await c.answer()
-
-@dp.callback_query(F.data == "banner_list", IsAdminFilter())
-async def banner_list(c: CallbackQuery):
-    banners = db.get_all_banners()
-    txt = "📜 <b>Список баннеров:</b>\n\n"
-    if not banners:
-        txt += "Баннеров пока нет."
-    else:
-        for b in banners:
-            txt += "🔹 <b>Реклама:</b> " + b['caption'] + "\n"
-            txt += "🔹 <b>Кнопка:</b> " + b['text'] + " -> " + b['url'] + " (" + b['color'] + ")\n\n"
-    await c.message.edit_text(txt, reply_markup=kb.banners_list_kb(banners))
-    await c.answer()
-
-@dp.callback_query(F.data == "banner_add", IsAdminFilter())
-async def banner_add(c: CallbackQuery, state: FSMContext):
-    await c.message.edit_text("Введи ТЕКСТ рекламы (например: 🔥 Заработай 500 звезд!):", reply_markup=kb.back_admin_kb())
-    await state.set_state(AdminStates.w_banner_caption)
-
-@dp.message(AdminStates.w_banner_caption, IsAdminFilter())
-async def banner_caption(m: Message, state: FSMContext):
-    await state.update_data(b_caption=m.html_text.strip())
-    await m.answer("Теперь введи ТЕКСТ КНОПКИ (например: Получить):")
-    await state.set_state(AdminStates.w_banner_text)
-
-@dp.message(AdminStates.w_banner_text, IsAdminFilter())
-async def banner_text(m: Message, state: FSMContext):
-    await state.update_data(b_text=m.text.strip())
-    await m.answer("Введи ссылку (URL), куда ведет баннер:")
-    await state.set_state(AdminStates.w_banner_url)
-
-@dp.message(AdminStates.w_banner_url, IsAdminFilter())
-async def banner_url(m: Message, state: FSMContext):
-    if not m.text.startswith("http"):
-        return await m.answer("Ссылка должна начинаться с http:// или https://")
-    await state.update_data(b_url=m.text.strip())
-    
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🔵 Синяя", callback_data="b_color:primary"))
-    b.row(InlineKeyboardButton(text="🟢 Зеленая", callback_data="b_color:success"))
-    b.row(InlineKeyboardButton(text="🔴 Красная", callback_data="b_color:danger"))
-    b.row(InlineKeyboardButton(text="⚪ Обычная", callback_data="b_color:None"))
-    await m.answer("Выбери цвет баннера:", reply_markup=b.as_markup())
-    await state.set_state(AdminStates.w_banner_color)
-
-@dp.callback_query(F.data.startswith("b_color:"), AdminStates.w_banner_color, IsAdminFilter())
-async def banner_color(c: CallbackQuery, state: FSMContext):
-    color = c.data.split(":")[1]
-    d = await state.get_data()
-    db.add_banner(d['b_caption'], d['b_text'], d['b_url'], color)
-    await state.clear()
-    await c.message.edit_text("✅ Баннер успешно добавлен!", reply_markup=kb.back_admin_kb())
-    await c.answer()
-
-@dp.callback_query(F.data.startswith("banner_del:"), IsAdminFilter())
-async def banner_del(c: CallbackQuery):
-    bid = int(c.data.split(":")[1])
-    db.delete_banner(bid)
-    await c.answer("Баннер удален")
-    await banner_list(c)
+            print("Ошибка бэкапа: " + str(e)); await asyncio.sleep(3600)
 
 # ================= ВОРКЕР УВЕДОМЛЕНИЙ =================
 async def task_notifier_worker():
     while True:
         try:
-            await asyncio.sleep(60)
-            if db.get_setting("notify_enabled") != "1":
-                continue
-
-            try:
-                interval = int(db.get_setting("notify_interval"))
-            except Exception:
-                interval = 12
-
-            last_notify = db.get_setting("last_notify_time")
-            now = datetime.now()
-
-            if last_notify:
-                try:
-                    last_time = datetime.fromisoformat(last_notify)
-                    if (now - last_time).total_seconds() < interval * 3600:
-                        continue
-                except Exception:
-                    pass
-
-            texts = json.loads(db.get_setting("notify_texts") or "[]")
-            if not texts:
-                texts = ['<tg-emoji emoji-id="6030563507299160824">🔔</tg-emoji> <b>Появилось новое задание!</b>\n\nОткрой его и заработай +{reward} ⭐']
-
-            chosen_text = random.choice(texts)
-            text = safe_format(chosen_text, reward=db.get_setting("task_reward"))
-
-            conn = db.get_conn()
-            users = conn.execute("SELECT user_id FROM users WHERE is_banned = 0").fetchall()
-            conn.close()
-
-            for u in users:
-                try:
-                    await bot.send_message(u['user_id'], text, reply_markup=kb.notify_task_kb())
-                    await asyncio.sleep(0.05)
-                except Exception:
-                    pass
-
-            db.set_setting("last_notify_time", now.isoformat())
+            await asyncio.sleep(60) # Проверяем каждую минуту
+            with db.get_conn() as conn:
+                notifs = conn.execute("SELECT * FROM scheduled_notifs").fetchall()
+                users = conn.execute("SELECT user_id FROM users WHERE is_banned = 0").fetchall()
+                
+                now = datetime.now()
+                for n in notifs:
+                    last_sent = n['last_sent']
+                    should_send = False
+                    
+                    if not last_sent: should_send = True
+                    else:
+                        last_dt = datetime.fromisoformat(last_sent)
+                        if (now - last_dt).total_seconds() >= n['interval_hours'] * 3600: should_send = True
+                            
+                    if should_send:
+                        markup = kb.build_kb_from_rows(json.loads(n['buttons'])) if n['buttons'] else None
+                        for u in users:
+                            try:
+                                if n['media']:
+                                    if n['media_type'] == 'photo': await bot.send_photo(u['user_id'], n['media'], caption=n['text'], reply_markup=markup)
+                                    else: await bot.send_video(u['user_id'], n['media'], caption=n['text'], reply_markup=markup)
+                                else: await bot.send_message(u['user_id'], n['text'], reply_markup=markup)
+                                await asyncio.sleep(0.05)
+                            except Exception: pass
+                        
+                        conn.execute("UPDATE scheduled_notifs SET last_sent = ? WHERE id = ?", (now.isoformat(), n['id']))
+                        conn.commit()
         except Exception as e:
-            print("Ошибка воркера уведомлений: " + str(e))
-            await asyncio.sleep(60)
+            print(f"Ошибка воркера: {e}")
 
 # ================= ЗАПУСК =================
 async def main():

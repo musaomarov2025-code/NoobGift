@@ -35,9 +35,15 @@ async def send_av(message, text, markup=None):
         try: 
             await message.answer_photo(photo=av, caption=text, reply_markup=markup)
             return
-        except Exception: pass
-    await message.answer(text=text, reply_markup=markup)
-
+        except Exception as e: 
+            print(f"Ошибка фото: {e}")
+            
+    try:
+        await message.answer(text=text, reply_markup=markup)
+    except Exception as e:
+        print(f"Ошибка текста: {e}")
+        await message.answer("⚠️ Ошибка в тексте. Проверьте настройки в админке.", reply_markup=markup)
+        
 class UserStates(StatesGroup):
     w_amount = State()
 
@@ -377,7 +383,9 @@ async def menu_stats(call: CallbackQuery):
     try: await call.message.delete()
     except Exception: pass
     s = db.get_stats()
-    await send_av(call.message, safe_format(db.get_setting("stats_text"), total_users=s['total'], total_withdrawn=fmt(s['total_stars'])), kb.stats_kb())
+    text = safe_format(db.get_setting("stats_text"), total_users=s['total'], total_withdrawn=fmt(s['total_stars']))
+    await send_av(call.message, text, kb.stats_kb())
+    await call.answer()
 
 @dp.callback_query(F.data == "top_balance")
 async def top_balance(call: CallbackQuery):
@@ -474,7 +482,13 @@ async def admin_detailed_stats(c: CallbackQuery):
     txt += "💸 <b>Выводы:</b>\n"
     txt += "├ Ожидают: <b>" + str(s['pending']) + "</b> (на " + fmt(s['pending_stars']) + " ⭐)\n"
     txt += "└ Выплачено: <b>" + str(s['done']) + "</b> (на " + fmt(s['total_stars']) + " ⭐)"
-    await c.message.edit_text(txt, reply_markup=kb.back_admin_kb())
+    
+    try: 
+        await c.message.delete()
+    except Exception: 
+        pass
+        
+    await c.message.answer(txt, reply_markup=kb.back_admin_kb())
     await c.answer()
 
 # ================= АДМИНКА: ЗАЯВКИ НА ВЫВОД =================

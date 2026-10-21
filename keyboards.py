@@ -10,7 +10,7 @@ def build_kb_from_rows(rows):
     """
     rows — список рядов, каждый ряд — список словарей:
     {"text": str, "url": str, "color": str|None}
-    Возвращает InlineKeyboardMarkup или None, если рядов нет.
+    Поддерживает URL и внутренние переходы action:...
     """
     if not rows:
         return None
@@ -21,11 +21,21 @@ def build_kb_from_rows(rows):
             style = btn.get("color")
             if style in ("None", "", None):
                 style = None
-            buttons.append(InlineKeyboardButton(
-                text=btn["text"],
-                url=btn["url"],
-                style=style
-            ))
+                
+            url = btn.get("url", "")
+            if url.startswith("action:"):
+                cb_data = url.replace("action:", "")
+                buttons.append(InlineKeyboardButton(
+                    text=btn["text"],
+                    callback_data=cb_data,
+                    style=style
+                ))
+            else:
+                buttons.append(InlineKeyboardButton(
+                    text=btn["text"],
+                    url=url,
+                    style=style
+                ))
         if buttons:
             builder.row(*buttons)
     return builder.as_markup()
@@ -160,8 +170,8 @@ def admin_kb():
         [InlineKeyboardButton(text="🎯 Задания (Сервисы)", callback_data="tasks_menu")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="broadcast_menu"),
          InlineKeyboardButton(text="🎟 Промокоды", callback_data="promos")],
-        [InlineKeyboardButton(text="📊 Реклама", callback_data="ad_menu"),
-         InlineKeyboardButton(text="💸 Начислить", callback_data="give_start")],
+        [InlineKeyboardButton(text="📊 Метки (реклама)", callback_data="ad_menu"),
+         InlineKeyboardButton(text="🖼 Показы (баннеры)", callback_data="banners_menu")],
         [InlineKeyboardButton(text="👑 Админы", callback_data="admins_menu"),
          InlineKeyboardButton(text="🔔 Уведомления", callback_data="admin_notify")],
         [InlineKeyboardButton(text="👥 Юзер", callback_data="user_find"),
@@ -174,35 +184,16 @@ def admin_kb():
 # ЭКРАН "АДМИНЫ"
 # ==========================================
 def admins_list_kb(admins):
-    """
-    admins — список словарей:
-    {"user_id": int, "username": str|None, "is_main": bool}
-    Главный админ помечается 👑 и без кнопки удаления.
-    """
     builder = InlineKeyboardBuilder()
     for a in admins:
         if a["is_main"]:
             label = f"👑 @{a['username']}" if a["username"] else f"👑 {a['user_id']}"
-            builder.row(InlineKeyboardButton(
-                text=label,
-                callback_data="admin_noop"
-            ))
+            builder.row(InlineKeyboardButton(text=label, callback_data="admin_noop"))
         else:
             label = f"🗑 @{a['username']}" if a["username"] else f"🗑 {a['user_id']}"
-            builder.row(InlineKeyboardButton(
-                text=label,
-                callback_data=f"admin_del:{a['user_id']}",
-                style="danger"
-            ))
-    builder.row(InlineKeyboardButton(
-        text="➕ Добавить админа",
-        callback_data="admin_add",
-        style="success"
-    ))
-    builder.row(InlineKeyboardButton(
-        text="⬅️ Назад",
-        callback_data="admin_back"
-    ))
+            builder.row(InlineKeyboardButton(text=label, callback_data=f"admin_del:{a['user_id']}", style="danger"))
+    builder.row(InlineKeyboardButton(text="➕ Добавить админа", callback_data="admin_add", style="success"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
     return builder.as_markup()
 
 
@@ -211,6 +202,39 @@ def admin_confirm_delete_kb(user_id):
         [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin_del_ok:{user_id}", style="danger"),
          InlineKeyboardButton(text="❌ Отмена", callback_data="admins_menu")],
     ])
+
+
+# ==========================================
+# ЭКРАН "ПОКАЗЫ (БАННЕРЫ)"
+# ==========================================
+def banners_menu_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить баннер", callback_data="banner_add")],
+        [InlineKeyboardButton(text="📋 Список баннеров", callback_data="banner_list")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+def banners_list_kb(banners):
+    builder = InlineKeyboardBuilder()
+    if not banners:
+        builder.row(InlineKeyboardButton(text="Нет баннеров", callback_data="admin_noop"))
+    for b in banners:
+        short_text = b['text'][:20] + "..." if len(b['text']) > 20 else b['text']
+        builder.row(InlineKeyboardButton(text=f"🗑 {short_text}", callback_data=f"banner_del:{b['id']}", style="danger"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="banners_menu"))
+    return builder.as_markup()
+
+
+# ==========================================
+# ЭКРАН "СПИСОК УВЕДОМЛЕНИЙ"
+# ==========================================
+def notify_list_kb(texts):
+    builder = InlineKeyboardBuilder()
+    for i, t in enumerate(texts):
+        short_t = t[:20].replace('\n', ' ') + "..." if len(t) > 20 else t
+        builder.row(InlineKeyboardButton(text=f"🗑 {short_t}", callback_data=f"notify_del:{i}", style="danger"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_notify"))
+    return builder.as_markup()
 
 
 # ==========================================
@@ -288,7 +312,7 @@ def promo_srv_kb(selected_services):
 
 
 # ==========================================
-# РЕКЛАМА
+# РЕКЛАМА (МЕТКИ)
 # ==========================================
 def ad_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[

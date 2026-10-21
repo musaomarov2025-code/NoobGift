@@ -420,17 +420,35 @@ async def menu_withdraw(call: CallbackQuery, state: FSMContext):
     await send_av(call.message, t, kb.withdraw_kb())
     await state.set_state(UserStates.w_amount)
 
-async def do_withdraw(message: Message, amount: float):
-    u = db.get_user(message.from_user.id)
-    if round(u['balance'], 2) < amount: return await message.answer(f"❌ Не хватает звёзд. Баланс: {fmt(u['balance'])} ⭐")
-    req, conf = int(db.get_setting("withdraw_friends_required")), db.get_confirmed_refs_count(u['user_id'])
-    if conf < req: return await message.answer(f"❌ Нужно пригласить друзей: {req} (у вас {conf})")
-    wid = db.create_withdrawal(u['user_id'], amount)
+async def do_withdraw(uid: int, message: Message, amount: float):
+    u = db.get_user(uid)
+    if not u: return await message.answer("❌ Ошибка: юзер не найден.")
+    if round(u['balance'], 2) < amount: 
+        return await message.answer(f"❌ Не хватает звёзд. Баланс: {fmt(u['balance'])} ⭐")
+    
+    req = int(db.get_setting("withdraw_friends_required"))
+    conf = db.get_confirmed_refs_count(uid)
+    if conf < req: 
+        return await message.answer(f"❌ Нужно пригласить друзей: {req} (у вас {conf})")
+    
+    wid = db.create_withdrawal(uid, amount)
     await message.answer(f'✅ Заявка <b>#{wid}</b> на <b>{fmt(amount)}</b> ⭐ создана.\n\nСрок вывода: 5 минут — 24 часа.', reply_markup=kb.back_kb())
     
-    with db.get_conn() as conn: refs = conn.execute("SELECT user_id, username FROM users WHERE referrer_id = ? AND passed_op = 1", (u['user_id'],)).fetchall()
+    with db.get_conn() as conn: 
+        refs = conn.execute("SELECT user_id, username FROM users WHERE referrer_id = ? AND passed_op = 1", (uid,)).fetchall()
+    
     refs_str = "".join([f"├ @{r['username'] if r['username'] else 'id'+str(r['user_id'])}\n" for r in refs]) or "├ Нет друзей\n"
-    admin_msg = f"💸 <b>Новая заявка на вывод #{wid}</b>\n\n👤 Пользователь: @{u['username'] or 'нет'} (<code>{u['user_id']}</code>)\n💰 Сумма: <b>{fmt(amount)}</b> ⭐\n👥 Рефералов: {conf}\n🎯 Заданий: {u['tasks_completed']}\n✅ Прошел ОП: {'✅ Да' if u['passed_op'] else '❌ Нет'}\n💵 Остаток: {fmt(u['balance'] - amount)} ⭐\n\n📊 <b>Кого он привел:</b>\n{refs_str}"
+    
+    admin_msg = (
+        f"💸 <b>Новая заявка на вывод #{wid}</b>\n\n"
+        f"👤 Пользователь: @{u['username'] or 'нет'} (<code>{u['user_id']}</code>)\n"
+        f"💰 Сумма: <b>{fmt(amount)}</b> ⭐\n"
+        f"👥 Рефералов: {conf}\n"
+        f"🎯 Заданий: {u['tasks_completed']}\n"
+        f"✅ Прошел ОП: {'✅ Да' if u['passed_op'] else '❌ Нет'}\n"
+        f"💵 Остаток: {fmt(u['balance'] - amount)} ⭐\n\n"
+        f"📊 <b>Кого он привел:</b>\n{refs_str}"
+    )
     try: await bot.send_message(ADMIN_ID, admin_msg, reply_markup=kb.back_admin_kb())
     except Exception: pass
 
@@ -442,12 +460,20 @@ async def process_wd_text(message: Message, state: FSMContext):
     await state.clear()
     await do_withdraw(message, amount)
 
+@dp.message(UserStates.w_amount)
+async def process_wd_text(message: Message, state: FSMContext):
+    try: amount = float(message.text.strip().replace(',', '.'))
+    except ValueError: return await message.answer("❌ Введи число (например: 15, 25, 50, 100) или нажми кнопку.")
+    if amount not in WITHDRAW_AMOUNTS: return await message.answer(f"❌ Неверная сумма. Доступно: {', '.join(map(str, WITHDRAW_AMOUNTS))}")
+    await state.clear()
+    await do_withdraw(message.from_user.id, message, amount)
+
 @dp.callback_query(F.data.regexp(r"^wd_\d+$"))
 async def process_wd_btn(call: CallbackQuery, state: FSMContext):
     await state.clear()
     try: await call.message.delete()
     except Exception: pass
-    await do_withdraw(call.message, float(call.data.split("_")[1]))
+    await do_withdraw(call.from_user.id, call.message, float(call.data.split("_")[1]))
     await call.answer()
     # ================= АДМИН\КА: БАЗАn И СТАТИСТИКА =================З
 @dp.message(Command("admin"), IsAdminFilter())

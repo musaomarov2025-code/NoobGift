@@ -40,7 +40,7 @@ def init_db():
         cur.execute("""CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, service TEXT, task_id TEXT, link TEXT, status TEXT DEFAULT 'pending', created_at TEXT)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS task_completed (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, service TEXT, task_id TEXT, reward REAL, done_at TEXT)""")
 
-        # 7. Реклама
+        # 7. Реклама (метки)
         cur.execute("""CREATE TABLE IF NOT EXISTS ad_sources (code TEXT PRIMARY KEY, owner_id INTEGER, created_at TEXT, clicks INTEGER DEFAULT 0, price REAL DEFAULT 0)""")
 
         # 8. Интеграции
@@ -48,6 +48,9 @@ def init_db():
 
         # 9. Админы
         cur.execute("""CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY, added_by INTEGER, added_at TEXT)""")
+        
+        # 10. Баннеры (Показы в меню)
+        cur.execute("""CREATE TABLE IF NOT EXISTS banners (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, url TEXT, color TEXT DEFAULT 'None')""")
 
         # Заполняем базовые сервисы
         services = [('botohub', 'op'), ('piarflow', 'tasks'), ('tgrass', 'tasks'), ('trafsly', 'tasks'), ('subgram', 'tasks'), ('flyer', 'tasks')]
@@ -75,15 +78,18 @@ def init_db():
         if "op_service" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_service TEXT")
         if "op_count" not in cols_promo: cur.execute("ALTER TABLE promos ADD COLUMN op_count INTEGER DEFAULT 0")
 
-        # Миграция для таблицы tasks (добавляем created_at) — ИСПРАВЛЕН ОТСТУП
         cur.execute("PRAGMA table_info(tasks)")
         cols_tasks = {r[1] for r in cur.fetchall()}
         if "created_at" not in cols_tasks:
             cur.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
 
-        # Заполняем настройки по умолчанию, если их нет
+        # Заполняем настройки по умолчанию
         for k, v in DEFAULTS.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
+            
+        # Индекс текущего баннера для прокрутки
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('banner_index', '0')")
+        
         conn.commit()
 
 
@@ -100,6 +106,44 @@ def set_setting(key, value):
         conn.commit()
 
 
+# ================= ФУНКЦИИ БАННЕРОВ (РЕКЛАМЫ) =================
+def add_banner(text, url, color="None"):
+    with get_conn() as conn:
+        conn.execute("INSERT INTO banners (text, url, color) VALUES (?, ?, ?)", (text, url, color))
+        conn.commit()
+
+def get_all_banners():
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM banners ORDER BY id").fetchall()
+
+def delete_banner(bid):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM banners WHERE id = ?", (bid,))
+        conn.commit()
+
+def get_next_banner():
+    with get_conn() as conn:
+        banners = conn.execute("SELECT * FROM banners ORDER BY id").fetchall()
+        if not banners:
+            return None
+        
+        try:
+            current_idx = int(get_setting("banner_index"))
+        except:
+            current_idx = 0
+            
+        if current_idx >= len(banners):
+            current_idx = 0
+            
+        banner = banners[current_idx]
+        
+        # Сохраняем индекс следующего
+        next_idx = (current_idx + 1) % len(banners)
+        set_setting("banner_index", str(next_idx))
+        
+        return banner
+
+
 # ================= ФУНКЦИИ АДМИНОВ =================
 def is_main_admin(user_id):
     return user_id == ADMIN_ID
@@ -114,7 +158,6 @@ def is_admin(user_id):
 
 
 def add_admin(user_id, added_by):
-    """Добавляет админа. Возвращает True, если добавлен, False, если уже был."""
     with get_conn() as conn:
         existing = conn.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,)).fetchone()
         if existing:
@@ -128,7 +171,6 @@ def add_admin(user_id, added_by):
 
 
 def remove_admin(user_id):
-    """Удаляет админа. Главного админа (ADMIN_ID) удалить нельзя."""
     if is_main_admin(user_id):
         return False
     with get_conn() as conn:
@@ -139,7 +181,6 @@ def remove_admin(user_id):
 
 
 def get_admins():
-    """Список всех админов: сначала главный (ADMIN_ID), потом остальные."""
     result = []
     main_user = get_user(ADMIN_ID)
     result.append({
@@ -349,7 +390,7 @@ def get_all_promos():
         return conn.execute("SELECT * FROM promos ORDER BY used DESC").fetchall()
 
 
-# ================= ФУНКЦИИ РЕКЛАМЫ =================
+# ================= ФУНКЦИИ РЕКЛАМЫ (МЕТКИ) =================
 def add_ad_source(code, owner_id, price=0):
     with get_conn() as conn:
         conn.execute("INSERT OR REPLACE INTO ad_sources (code, owner_id, created_at, price) VALUES (?, ?, ?, ?)", (code.lower(), owner_id, datetime.now().isoformat(), price))

@@ -362,22 +362,17 @@ async def start_cmd(message: Message, state: FSMContext):
                 ref_id = None
 
     u = db.get_user(uid)
-    if u and u['is_banned']:
-        return await message.answer("🚫 Вы забанены в этом боте.")
-
     if db.add_user(uid, message.from_user.username, ref_id):
         if ref_id:
             db.create_pending_referral(uid, ref_id)
-            uname = f"@{message.from                   _user.username}" if message.from_user.username else p "Пользователь"
-            try_k:
-                await bot.send_message(ref_id, fb'<tg-emoji emoji-id=" =5454096636957533398">⚡️</tg-emoji> <b>{uname}</b> присоединился по твоей ссылке!\n\nТы получишь <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji>, как только он пройдет обязательную подписку.')
+            if message.from_user.username:
+                uname = "@" + message.from_user.username
+            else:
+                uname = "Пользователь"
+            try:
+                await bot.send_message(ref_id, '<tg-emoji emoji-id="5454096636957533398">⚡️</tg-emoji> <b>' + uname + '</b> присоединился по твоей ссылке!\n\nТы получишь <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji>, как только он пройдет обязательную подписку.')
             except Exception:
                 pass
-        if ad_code_val:
-            db.track_ad_click(ad_code_val)
-            db.set_user_ad_code(uid, ad_code_val)
-    else:
-        db.update_username(uid, message.from_user.username)
 
     if promo_code:
         ok, msg = db.activate_promo(promo_code, uid)
@@ -426,13 +421,14 @@ async def finish_start(message: Message, uid: int):
         bns = float(db.get_setting("ref_bonus"))
         db.add_balance(ref, bns)
         u = db.get_user(uid)
-        uname = f"@{u['username']}" if u['username'] else "Пользователь"
+        if u['username']:
+            uname = "@" + u['username']
+        else:
+            uname = "Пользователь"
         try:
-            await bot.send_message(ref, f'<tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji> Твой реферал <b>{uname}</b> прошел обязательную подписку: <b>+{fmt(bns)} <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji></b>')
+            await bot.send_message(ref, '<tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji> Твой реферал <b>' + uname + '</b> прошел обязательную подписку: <b>+' + fmt(bns) + ' <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji></b>')
         except Exception:
             pass
-    await send_main_menu(message)
-
 
 @dp.callback_query(F.data == "op_check")
 async def op_check_cb(call: CallbackQuery):
@@ -562,12 +558,18 @@ async def menu_profile(call: CallbackQuery):
     except Exception:
         pass
     u = db.get_user(call.from_user.id)
+    
+    if u['username']:
+        uname = "@" + u['username']
+    else:
+        uname = "Юзер"
+        
     t = db.get_setting("profile_text").format(
-        username=f"@{u['username']}" if u['username'] else "Юзер",
-        total_refs=db.get_pending_refs_count(u['user_id']) + db.get_confirmed_refs_count(u['user_id']),
-        total_earned=fmt(u['total_earned']),
-        balance=fmt(u['balance']),
-        user_id=u['user_id'],
+        username=uname, 
+        total_refs=db.get_pending_refs_count(u['user_id']) + db.get_confirmed_refs_count(u['user_id']), 
+        total_earned=fmt(u['total_earned']), 
+        balance=fmt(u['balance']), 
+        user_id=u['user_id'], 
         tasks_completed=u['tasks_completed']
     )
     await send_av(call.message, t, kb.back_kb())

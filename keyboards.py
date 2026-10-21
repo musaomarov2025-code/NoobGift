@@ -2,27 +2,21 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import WITHDRAW_AMOUNTS
 
-
 def build_kb_from_rows(rows):
-    if not rows:
-        return None
+    if not rows: return None
     builder = InlineKeyboardBuilder()
     for row in rows:
         buttons = []
         for btn in row:
             style = btn.get("color")
-            if style in ("None", "", None):
-                style = None
+            if style in ("None", "", None): style = None
             url = btn.get("url", "")
             if url.startswith("action:"):
-                cb_data = url.replace("action:", "")
-                buttons.append(InlineKeyboardButton(text=btn["text"], callback_data=cb_data, style=style))
+                buttons.append(InlineKeyboardButton(text=btn["text"], callback_data=url.replace("action:", ""), style=style))
             else:
                 buttons.append(InlineKeyboardButton(text=btn["text"], url=url, style=style))
-        if buttons:
-            builder.row(*buttons)
+        if buttons: builder.row(*buttons)
     return builder.as_markup()
-
 
 def main_menu_kb():
     builder = InlineKeyboardBuilder()
@@ -38,18 +32,15 @@ def main_menu_kb():
     builder.row(InlineKeyboardButton(text='Инструкция', callback_data="menu_instruction", icon_custom_emoji_id="5334544901428229844"))
     return builder.as_markup()
 
-
 def back_kb(target="menu_back"):
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='Назад', callback_data=target, icon_custom_emoji_id="5346230992044574063"))
     return builder.as_markup()
 
-
 def notify_task_kb():
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="Открыть задания", callback_data="menu_earn", style="primary", icon_custom_emoji_id="5472033358693280429"))
     return builder.as_markup()
-
 
 def op_screen_kb(items, confirm_callback="op_check"):
     builder = InlineKeyboardBuilder()
@@ -58,7 +49,6 @@ def op_screen_kb(items, confirm_callback="op_check"):
         builder.row(InlineKeyboardButton(text=f"{prefix}{title} {i}", url=url, icon_custom_emoji_id="5472033358693280429", style="primary"))
     builder.row(InlineKeyboardButton(text="Я подписался", callback_data=confirm_callback, icon_custom_emoji_id="5411197345968701560", style="success"))
     return builder.as_markup()
-
 
 def task_kb(task_url):
     builder = InlineKeyboardBuilder()
@@ -70,16 +60,12 @@ def task_kb(task_url):
     builder.row(InlineKeyboardButton(text='Назад', callback_data="menu_back", icon_custom_emoji_id="5346230992044574063"))
     return builder.as_markup()
 
-
 def withdraw_kb():
     builder = InlineKeyboardBuilder()
-    row_buttons = []
-    for amount in WITHDRAW_AMOUNTS:
-        row_buttons.append(InlineKeyboardButton(text=str(amount), callback_data=f"wd_{amount}", style="primary"))
+    row_buttons = [InlineKeyboardButton(text=str(amt), callback_data=f"wd_{amt}", style="primary") for amt in WITHDRAW_AMOUNTS]
     builder.row(*row_buttons)
     builder.row(InlineKeyboardButton(text='Назад', callback_data="menu_back", icon_custom_emoji_id="5346230992044574063"))
     return builder.as_markup()
-
 
 def stats_kb():
     builder = InlineKeyboardBuilder()
@@ -91,19 +77,16 @@ def stats_kb():
     builder.row(InlineKeyboardButton(text='Назад', callback_data="menu_back", icon_custom_emoji_id="5346230992044574063"))
     return builder.as_markup()
 
-
 def admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎯 Спонсоры (ОП)", callback_data="bh_menu"), InlineKeyboardButton(text="📋 Заявки", callback_data="wd_list")],
         [InlineKeyboardButton(text="🎛 Приватка", callback_data="priv_menu"), InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
         [InlineKeyboardButton(text="🎯 Задания (Сервисы)", callback_data="tasks_menu")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="broadcast_menu"), InlineKeyboardButton(text="🎟 Промокоды", callback_data="promos")],
-        [InlineKeyboardButton(text="📊 Метки (реклама)", callback_data="ad_menu"), InlineKeyboardButton(text="🖼 Показы (баннеры)", callback_data="banners_menu")],
-        [InlineKeyboardButton(text="👑 Админы", callback_data="admins_menu"), InlineKeyboardButton(text="🔔 Уведомления", callback_data="admin_notify")],
-        [InlineKeyboardButton(text="👥 Юзер", callback_data="user_find"), InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")],
-        [InlineKeyboardButton(text="📦 Бэкап", callback_data="backup_help")],
+        [InlineKeyboardButton(text="📊 Метки (реклама)", callback_data="ad_menu"), InlineKeyboardButton(text="👑 Админы", callback_data="admins_menu")],
+        [InlineKeyboardButton(text="🔔 Уведомления", callback_data="admin_notify"), InlineKeyboardButton(text="👥 Юзер", callback_data="user_find")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings"), InlineKeyboardButton(text="📦 Бэкап", callback_data="backup_help")],
     ])
-
 
 def admins_list_kb(admins):
     builder = InlineKeyboardBuilder()
@@ -118,40 +101,8 @@ def admins_list_kb(admins):
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back"))
     return builder.as_markup()
 
-
 def admin_confirm_delete_kb(user_id):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin_del_ok:{user_id}", style="danger"), InlineKeyboardButton(text="❌ Отмена", callback_data="admins_menu")],
-    ])
-
-
-def banners_menu_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Добавить баннер", callback_data="banner_add")],
-        [InlineKeyboardButton(text="📋 Список баннеров", callback_data="banner_list")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
-    ])
-
-
-def banners_list_kb(banners):
-    builder = InlineKeyboardBuilder()
-    if not banners:
-        builder.row(InlineKeyboardButton(text="Нет баннеров", callback_data="admin_noop"))
-    for b in banners:
-        short_text = b['text'][:20] + "..." if len(b['text']) > 20 else b['text']
-        builder.row(InlineKeyboardButton(text=f"🗑 {short_text}", callback_data=f"banner_del:{b['id']}", style="danger"))
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="banners_menu"))
-    return builder.as_markup()
-
-
-def notify_list_kb(texts):
-    builder = InlineKeyboardBuilder()
-    for i, t in enumerate(texts):
-        short_t = t[:20].replace('\n', ' ') + "..." if len(t) > 20 else t
-        builder.row(InlineKeyboardButton(text=f"🗑 {short_t}", callback_data=f"notify_del:{i}", style="danger"))
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_notify"))
-    return builder.as_markup()
-
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin_del_ok:{user_id}", style="danger"), InlineKeyboardButton(text="❌ Отмена", callback_data="admins_menu")]])
 
 def user_action_kb(uid: int, is_banned: int):
     builder = InlineKeyboardBuilder()
@@ -161,14 +112,11 @@ def user_action_kb(uid: int, is_banned: int):
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back", icon_custom_emoji_id="5346230992044574063"))
     return builder.as_markup()
 
-
 def wd_page_kb(wid, idx, total):
     nav_row = []
-    if idx > 0:
-        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"wd_page:{idx-1}"))
+    if idx > 0: nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"wd_page:{idx-1}"))
     nav_row.append(InlineKeyboardButton(text=f"{idx+1}/{total}", callback_data="wd_noop"))
-    if idx < total - 1:
-        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"wd_page:{idx+1}"))
+    if idx < total - 1: nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"wd_page:{idx+1}"))
     return InlineKeyboardMarkup(inline_keyboard=[
         nav_row,
         [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"wd_ok:{wid}"), InlineKeyboardButton(text="❌ Отклонить", callback_data=f"wd_no:{wid}")],
@@ -176,23 +124,15 @@ def wd_page_kb(wid, idx, total):
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-
-def wd_empty_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]])
-
-
-def back_admin_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]])
-
+def wd_empty_kb(): return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]])
+def back_admin_kb(): return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]])
 
 def bh_kb(enabled):
-    status = "🔴 Выключить" if enabled else "🟢 Включить"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Текст сообщения", callback_data="bh_edit_text"), InlineKeyboardButton(text="📥 ОП на входе (кол-во)", callback_data="bh_edit_entry")],
-        [InlineKeyboardButton(text=status, callback_data="bh_toggle")],
+        [InlineKeyboardButton(text="🔴 Выключить" if enabled else "🟢 Включить", callback_data="bh_toggle")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
-
 
 def promos_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -201,16 +141,12 @@ def promos_kb():
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-
-def promo_srv_kb(selected_services):
+def promo_srv_kb(sel):
     builder = InlineKeyboardBuilder()
-    services = ['botohub', 'piarflow', 'tgrass', 'trafsly', 'subgram', 'flyer']
-    for srv in services:
-        status = "✅ " if srv in selected_services else "❌ "
-        builder.row(InlineKeyboardButton(text=f"{status}{srv.upper()}", callback_data=f"psrv:{srv}"))
+    for srv in ['botohub', 'piarflow', 'tgrass', 'trafsly', 'subgram', 'flyer']:
+        builder.row(InlineKeyboardButton(text=("✅ " if srv in sel else "❌ ") + srv.upper(), callback_data=f"psrv:{srv}"))
     builder.row(InlineKeyboardButton(text="Готово ➡️", callback_data="psrv_done", style="success"))
     return builder.as_markup()
-
 
 def ad_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -219,12 +155,19 @@ def ad_menu_kb():
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-
 def settings_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Бонус за реферала", callback_data="set:ref_bonus")],
         [InlineKeyboardButton(text="🎯 Бонус за задание", callback_data="set:task_reward")],
         [InlineKeyboardButton(text="👥 Друзей для вывода", callback_data="set:withdraw_friends_required")],
         [InlineKeyboardButton(text="📝 Текст главного меню", callback_data="set:menu_text")],
+        [InlineKeyboardButton(text="📝 Текст рефералов", callback_data="set:ref_text")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+def sched_notifs_menu_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать уведомление", callback_data="sched_add")],
+        [InlineKeyboardButton(text="📋 Список уведомлений", callback_data="sched_list")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])

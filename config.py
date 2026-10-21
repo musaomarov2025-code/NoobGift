@@ -1,6 +1,12 @@
 import os
+
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-ADMIN_ID = 8742164697
+
+# Главный админ — берётся из переменных окружения BotHost.
+# Если переменная не задана — используется старый ID как fallback.
+_admin_env = os.environ.get("ADMIN_ID", "8742164697").strip()
+ADMIN_ID = int(_admin_env) if _admin_env else 8742164697
+
 DB = "/app/data/cows.db"
 
 # === ОП (Botohub) ===
@@ -29,8 +35,8 @@ DEFAULTS = {
     "withdraw_friends_required": "3",
     "welcome_text": "Главное меню 👇",
     "withdraw_video_id": "",
-    "menu_avatar": "", # Ссылка на картинку для меню
-    
+    "menu_avatar": "",  # Ссылка на картинку для меню
+
     "botohub_enabled": "1",
     "botohub_entry_count": "2",
     "botohub_text": (
@@ -91,8 +97,8 @@ DEFAULTS = {
     "priv_text": "",
     "priv_media": "",
     "priv_buttons": "[]",
-    
-    # НОВЫЕ НАСТРОЙКИ ДЛЯ УВЕДОМЛЕНИЙ
+
+    # Уведомления
     "notify_enabled": "1",
     "notify_texts": "[]",
     "notify_interval": "12",

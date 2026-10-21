@@ -389,7 +389,7 @@ async def start_cmd(message: Message, state: FSMContext):
             try:
                 rows = json.loads(p_btns_json)
                 if rows:
- kb.build_kb_from_rows(rows)
+                    p_kb = kb.build_kb_from_rows(rows)
             except Exception:
                 pass
 

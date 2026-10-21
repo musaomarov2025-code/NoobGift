@@ -129,13 +129,12 @@ def mark_task_completed(user_id, service, task_id, reward):
 
 def get_stats():
     with get_conn() as conn:
-        active_today = conn.execute("SELECT COUNT(*) FROM users WHERE last_bonus LIKE ?", (str(date.today()) + "%",)).fetchone()[0]
         total_out = conn.execute("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status = 'completed'").fetchone()[0]
         pending_out = conn.execute("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status = 'pending'").fetchone()[0]
         return {
             "total": conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
             "today": conn.execute("SELECT COUNT(*) FROM users WHERE registered_at LIKE ?", (str(date.today()) + "%",)).fetchone()[0],
-            "active_today": active_today,
+            "active_today": conn.execute("SELECT COUNT(*) FROM users WHERE registered_at LIKE ?", (str(date.today()) + "%",)).fetchone()[0],
             "total_balance": conn.execute("SELECT COALESCE(SUM(balance),0) FROM users").fetchone()[0],
             "total_earned": conn.execute("SELECT COALESCE(SUM(total_earned),0) FROM users").fetchone()[0],
             "pending": conn.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'").fetchone()[0],
@@ -144,6 +143,7 @@ def get_stats():
             "pending_stars": pending_out,
             "tasks": conn.execute("SELECT COUNT(*) FROM task_completed").fetchone()[0]
         }
+        
 def get_top_balance(limit=10):
     with get_conn() as conn: return conn.execute("SELECT user_id, username, balance FROM users ORDER BY balance DESC LIMIT ?", (limit,)).fetchall()
 def get_top_refs(limit=10):

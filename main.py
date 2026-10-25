@@ -1,10 +1,4 @@
-import asyncio
-import logging
-import random
-import re
-import json
-import os
-import shutil
+import asyncio, logging, random, json, os, shutil
 from datetime import datetime
 import aiohttp
 from aiogram import Bot, Dispatcher, F
@@ -24,15 +18,11 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTM
 dp = Dispatcher()
 
 class IsAdminFilter(BaseFilter):
-    async def __call__(self, event) -> bool: 
-        return event.from_user.id == ADMIN_ID
+    async def __call__(self, event) -> bool: return event.from_user.id == ADMIN_ID
 
-def fmt(amt): 
-    return f"{round(amt, 2):g}" if amt % 1 else f"{round(amt):g}"
-
+def fmt(amt): return f"{round(amt, 2):g}" if amt % 1 else f"{round(amt):g}"
 def safe_format(text: str, **kwargs):
-    for k, v in kwargs.items(): 
-        text = text.replace("{" + k + "}", str(v))
+    for k, v in kwargs.items(): text = text.replace("{" + k + "}", str(v))
     return text
 
 async def send_av(message, text, markup=None):
@@ -42,10 +32,8 @@ async def send_av(message, text, markup=None):
             await message.answer_photo(photo=av, caption=text, reply_markup=markup)
             return
         except Exception: pass
-    try:
-        await message.answer(text=text, reply_markup=markup)
-    except Exception as e:
-        print(f"Ошибка отправки: {e}")
+    try: await message.answer(text=text, reply_markup=markup)
+    except Exception as e: print(f"Ошибка отправки: {e}")
 
 class UserStates(StatesGroup):
     w_amount = State()
@@ -57,7 +45,6 @@ class AdminStates(StatesGroup):
     w_set_val = State()
     w_n_text = State(); w_n_media = State(); w_n_btns = State(); w_n_int = State()
 
-# ================= API =================
 async def pf_get(uid):
     try:
         async with aiohttp.ClientSession() as s:
@@ -68,6 +55,7 @@ async def pf_get(uid):
                     if sp and sp[0].get("status") == "unsubscribed": return {"srv": "piarflow", "tid": sp[0]["link"], "link": sp[0]["link"]}
     except Exception: pass
     return None
+
 async def pf_check(uid, tid):
     try:
         async with aiohttp.ClientSession() as s:
@@ -89,6 +77,7 @@ async def tg_get(uid):
                             if not offer.get("subscribed"): return {"srv": "tgrass", "tid": str(offer["offer_id"]), "link": offer["link"]}
     except Exception: pass
     return None
+
 async def tg_check(uid, tid):
     try:
         async with aiohttp.ClientSession() as s:
@@ -109,6 +98,7 @@ async def tr_get(uid):
                     if sp and d.get("status") == "warning": return {"srv": "trafsly", "tid": str(sp[0]["ads_id"]), "link": sp[0]["link"]}
     except Exception: pass
     return None
+
 async def tr_check(uid, tid):
     try:
         async with aiohttp.ClientSession() as s:
@@ -136,7 +126,6 @@ async def check_task_status(srv, uid, tid):
     if srv == "trafsly": return await tr_check(uid, tid)
     return False
 
-# ================= СТАРТ =================
 async def check_user_sponsors(uid):
     sponsors = db.get_sponsors()
     if not sponsors: return True
@@ -168,8 +157,7 @@ async def start_cmd(message: Message, state: FSMContext):
         db.add_user(uid, message.from_user.username, ref_id)
         if ref_id:
             uname = message.from_user.first_name or "Пользователь"
-            percent = db.get_setting("ref_percent")
-            msg = f'<tg-emoji emoji-id="5193018401810822951">🎉</tg-emoji> <b>Новый реферал!</b> Пользователь <b>{uname}</b> запустил бота по вашей ссылке.\nВы получаете <b>{percent}%</b> от его заработка!'
+            msg = f'<tg-emoji emoji-id="5193018401810822951">🎉</tg-emoji> <b>Новый реферал!</b> Пользователь <b>{uname}</b> запустил бота по вашей ссылке.\nВы получаете <b>{db.get_setting("ref_percent")}%</b> от его заработка!'
             try: await bot.send_message(ref_id, msg)
             except Exception: pass
     else:
@@ -206,8 +194,14 @@ async def back_to_menu(call: CallbackQuery, state: FSMContext):
     except Exception: pass
     await send_main_menu(call.message)
     await call.answer()
-    # ================= ЗАДАНИЯ =================
-@dp.callback_query(F.data == "menu_earn")
+
+@dp.callback_query(F.data == "menu_instruction")
+async def menu_instruction(call: CallbackQuery):
+    try: await call.message.delete()
+    except Exception: pass
+    await send_av(call.message, db.get_setting("instruction_text"), kb.back_kb())
+    await call.answer()
+    @dp.callback_query(F.data == "menu_earn")
 async def show_tasks(call: CallbackQuery, state: FSMContext):
     await state.clear()
     try: await call.message.delete()
@@ -219,15 +213,12 @@ async def send_next_task(message: Message, uid: int):
     try:
         task = db.get_pending_task(uid)
         if task:
-            # Если есть незавершенное задание, показываем его
             txt = safe_format(db.get_setting("task_text"), reward=fmt(task['reward']))
             if task['service'] == "custom":
                 return await message.answer(txt, reply_markup=kb.task_kb(task['link'], "custom", task['task_id']))
             else:
                 return await message.answer(txt, reply_markup=kb.task_kb(task['link'], "service"))
         
-        # Если нет, ищем новое
-        # 1. Сначала проверяем твои каналы (custom_tasks)
         custom_tasks = db.get_custom_tasks()
         for ct in custom_tasks:
             if not db.check_user_channel(uid, ct['chat_id']):
@@ -236,7 +227,6 @@ async def send_next_task(message: Message, uid: int):
                 txt = safe_format(db.get_setting("task_text"), reward=fmt(task['reward']))
                 return await message.answer(txt, reply_markup=kb.task_kb(task['link'], "custom", task['task_id']))
                 
-        # 2. Если твоих нет, берем из сервисов
         new_t = await get_new_task(uid)
         if new_t:
             reward = float(db.get_setting("task_reward"))
@@ -255,7 +245,6 @@ async def check_task_cb(call: CallbackQuery):
     uid = call.from_user.id
     task = db.get_pending_task(uid)
     if not task: return await call.answer("Задание не найдено.", show_alert=True)
-    
     try: await call.message.edit_text("⏳ Проверяем...")
     except Exception: pass
     
@@ -272,8 +261,7 @@ async def check_task_cb(call: CallbackQuery):
         
         u = db.get_user(uid)
         if u['referrer_id']:
-            ref_percent = float(db.get_setting("ref_percent"))
-            ref_bonus = round(task['reward'] * (ref_percent / 100), 2)
+            ref_bonus = round(task['reward'] * (float(db.get_setting("ref_percent")) / 100), 2)
             if ref_bonus > 0:
                 db.add_ref_earning(u['referrer_id'], ref_bonus)
                 try: await bot.send_message(u['referrer_id'], f"⚡️ Твой реферал выполнил задание. Тебе начислено <b>{fmt(ref_bonus)}</b> ⭐")
@@ -286,14 +274,12 @@ async def check_task_cb(call: CallbackQuery):
         except Exception: pass
         await send_next_task(call.message, uid)
     else:
-        # Отправляем на ручную проверку
         db.mark_task_status(task['id'], 'manual')
         try: await call.message.delete()
         except Exception: pass
         await call.message.answer("⏳ Задание отправлено на ручную проверку. Ожидайте зачисления. А пока можете выполнить следующее:", reply_markup=kb.back_kb())
         await send_next_task(call.message, uid)
         await call.answer("На проверке. Ожидайте!", show_alert=True)
-    await call.answer()
 
 @dp.callback_query(F.data.startswith("check_custom:"))
 async def check_custom_cb(call: CallbackQuery):
@@ -301,7 +287,6 @@ async def check_custom_cb(call: CallbackQuery):
     tid = call.data.split(":")[1]
     task = db.get_pending_task(uid)
     if not task or task['task_id'] != tid: return await call.answer("Задание не найдено.", show_alert=True)
-    
     ct = next((x for x in db.get_custom_tasks() if str(x['id']) == tid), None)
     if not ct: return await call.answer("Задание удалено.", show_alert=True)
 
@@ -311,15 +296,13 @@ async def check_custom_cb(call: CallbackQuery):
     try:
         member = await bot.get_chat_member(ct['chat_id'], uid)
         is_done = member.status not in ['left', 'kicked']
-    except Exception:
-        is_done = False
+    except Exception: is_done = False
 
     if is_done:
         db.mark_task_status(task['id'], 'done')
         db.add_balance(uid, task['reward'])
         db.add_task_completed(uid)
         db.mark_user_channel(uid, ct['chat_id'], "custom")
-        
         try: await call.message.edit_text(f"✅ Выполнено! Начислено: {fmt(task['reward'])} ⭐")
         except Exception: pass
         await asyncio.sleep(1)
@@ -340,23 +323,13 @@ async def skip_task_cb(call: CallbackQuery):
     except Exception: pass
     await send_next_task(call.message, call.from_user.id)
 
-# ================= ПРОФИЛЬ И РЕФЕРАЛЫ =================
 @dp.callback_query(F.data == "menu_profile")
 async def menu_profile(call: CallbackQuery):
     try: await call.message.delete()
     except Exception: pass
     u = db.get_user(call.from_user.id)
     uname = "@" + u['username'] if u['username'] else "Юзер"
-    
-    t = safe_format(db.get_setting("profile_text"), 
-        username=uname, 
-        total_refs=db.get_refs_count(u['user_id']), 
-        total_withdrawn=fmt(u['total_withdrawn']), 
-        balance=fmt(u['balance']), 
-        user_id=u['user_id'], 
-        tasks_completed=u['tasks_completed'], 
-        ref_earnings=fmt(u['ref_earnings'])
-    )
+    t = safe_format(db.get_setting("profile_text"), username=uname, total_refs=db.get_refs_count(u['user_id']), total_withdrawn=fmt(u['total_withdrawn']), balance=fmt(u['balance']), user_id=u['user_id'], tasks_completed=u['tasks_completed'], ref_earnings=fmt(u['ref_earnings']))
     await send_av(call.message, t, kb.back_kb())
     await call.answer()
 
@@ -368,17 +341,10 @@ async def menu_refs(call: CallbackQuery):
     u = db.get_user(uid)
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{uid}"
-    
-    t = safe_format(db.get_setting("ref_text"), 
-        ref_percent=db.get_setting("ref_percent"), 
-        ref_link=link, 
-        total_refs=db.get_refs_count(uid), 
-        ref_earnings=fmt(u['ref_earnings'])
-    )
+    t = safe_format(db.get_setting("ref_text"), ref_percent=db.get_setting("ref_percent"), ref_link=link, total_refs=db.get_refs_count(uid), ref_earnings=fmt(u['ref_earnings']))
     await send_av(call.message, t, kb.back_kb())
     await call.answer()
 
-# ================= ВЫВОД =================
 @dp.callback_query(F.data == "menu_withdraw")
 async def menu_withdraw(call: CallbackQuery, state: FSMContext):
     try: await call.message.delete()
@@ -392,13 +358,10 @@ async def menu_withdraw(call: CallbackQuery, state: FSMContext):
 async def do_withdraw(uid: int, message: Message, amount: float):
     u = db.get_user(uid)
     if not u: return await message.answer("❌ Ошибка.")
-    if round(u['balance'], 2) < amount: 
-        return await message.answer(f"❌ Не хватает. Баланс: {fmt(u['balance'])} ⭐")
-    
+    if round(u['balance'], 2) < amount: return await message.answer(f"❌ Не хватает. Баланс: {fmt(u['balance'])} ⭐")
     wid = db.create_withdrawal(uid, amount)
     txt = f'<tg-emoji emoji-id="5427009714745517609">✅</tg-emoji> Заявка <b>#{wid}</b> на <b>{fmt(amount)}</b> <tg-emoji emoji-id="5408869739982246969">⭐</tg-emoji> создана.\n\nСрок вывода: 5 минут — 24 часа.'
     await message.answer(txt, reply_markup=kb.back_kb())
-    
     admin_msg = f"💸 <b>Заявка #{wid}</b>\n👤 @{u['username'] or 'нет'} (<code>{u['user_id']}</code>)\n💰 Сумма: {fmt(amount)}⭐\n👥 Рефов: {db.get_refs_count(uid)}\n🎯 Заданий: {u['tasks_completed']}\n💵 Остаток: {fmt(u['balance'] - amount)}⭐"
     try: await bot.send_message(ADMIN_ID, admin_msg)
     except Exception: pass
@@ -419,7 +382,6 @@ async def process_wd_btn(call: CallbackQuery, state: FSMContext):
     await do_withdraw(call.from_user.id, call.message, float(call.data.split("_")[1]))
     await call.answer()
 
-# ================= СТАТИСТИКА =================
 @dp.callback_query(F.data == "menu_stats")
 async def menu_stats(call: CallbackQuery):
     try: await call.message.delete()
@@ -456,8 +418,7 @@ async def top_earn(call: CallbackQuery):
     except Exception: pass
     await call.message.answer(txt, reply_markup=kb.back_kb("menu_stats"))
     await call.answer()
-    # ================= АДМИНКА: БАЗА =================
-@dp.message(Command("admin"), IsAdminFilter())
+    @dp.message(Command("admin"), IsAdminFilter())
 async def admin_cmd(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
@@ -477,11 +438,9 @@ async def admin_stats(c: CallbackQuery):
     except Exception: pass
     await c.answer()
 
-# --- СПОНСОРЫ (Вход) ---
 @dp.callback_query(F.data == "admin_sponsors", IsAdminFilter())
 async def admin_sponsors(c: CallbackQuery):
-    sponsors = db.get_sponsors()
-    try: await c.message.edit_text("🎯 <b>Обязательные спонсоры (Вход)</b>\nНажми на 🗑 для удаления:", reply_markup=kb.admin_sponsors_kb(sponsors))
+    try: await c.message.edit_text("🎯 <b>Обязательные спонсоры (Вход)</b>\nНажми на 🗑 для удаления:", reply_markup=kb.admin_sponsors_kb(db.get_sponsors()))
     except Exception: pass
     await c.answer()
 
@@ -521,11 +480,9 @@ async def sp_del(c: CallbackQuery):
     await c.answer("Удален")
     await admin_sponsors(c)
 
-# --- СВОИ ЗАДАНИЯ (Каналы) ---
 @dp.callback_query(F.data == "admin_tasks", IsAdminFilter())
 async def admin_tasks(c: CallbackQuery):
-    tasks = db.get_custom_tasks()
-    try: await c.message.edit_text("💼 <b>Свои задания (Каналы)</b>\nНажми на 🗑 для удаления:", reply_markup=kb.admin_tasks_kb(tasks))
+    try: await c.message.edit_text("💼 <b>Свои задания (Каналы)</b>\nНажми на 🗑 для удаления:", reply_markup=kb.admin_tasks_kb(db.get_custom_tasks()))
     except Exception: pass
     await c.answer()
 
@@ -566,8 +523,7 @@ async def t_reward(m: Message, state: FSMContext):
         db.add_custom_task(d['t_name'], d['t_url'], d['t_chat'], reward)
         await state.clear()
         await m.answer("✅ Задание добавлено!", reply_markup=kb.admin_kb())
-    except ValueError:
-        await m.answer("❌ Введи число.")
+    except ValueError: await m.answer("❌ Введи число.")
 
 @dp.callback_query(F.data.startswith("task_del:"), IsAdminFilter())
 async def task_del(c: CallbackQuery):
@@ -575,7 +531,6 @@ async def task_del(c: CallbackQuery):
     await c.answer("Удалено")
     await admin_tasks(c)
 
-# --- ЗАЯВКИ НА ВЫВОД ---
 @dp.callback_query(F.data == "admin_wd", IsAdminFilter())
 async def admin_wd(c: CallbackQuery):
     wds = db.get_pending_withdrawals()
@@ -611,7 +566,6 @@ async def wd_no(c: CallbackQuery):
     await c.answer("Отклонено")
     await admin_wd(c)
 
-# --- ЮЗЕРЫ ---
 @dp.callback_query(F.data == "admin_user", IsAdminFilter())
 async def admin_user(c: CallbackQuery, state: FSMContext):
     await c.message.edit_text("Введи ID или @username:", reply_markup=kb.back_admin_kb())
@@ -654,7 +608,6 @@ async def admin_u_bal_save(m: Message, state: FSMContext):
         await state.clear()
     except Exception: await m.answer("Ошибка. Введи число.")
 
-# --- НАСТРОЙКИ ---
 @dp.callback_query(F.data == "admin_settings", IsAdminFilter())
 async def admin_settings(c: CallbackQuery):
     await c.message.edit_text("⚙️ <b>Настройки</b>", reply_markup=kb.settings_kb(db.get_setting('ref_percent'), db.get_setting('task_reward'), db.get_setting('sponsor_penalty')))
@@ -671,11 +624,10 @@ async def admin_set(c: CallbackQuery, state: FSMContext):
 @dp.message(AdminStates.w_set_val, IsAdminFilter())
 async def admin_set_save(m: Message, state: FSMContext):
     d = await state.get_data()
-    db.set_setting(d['set_key'], m.text.strip())
+    db.set_setting(d['set_key'], m.html_text.strip())
     await m.answer("✅ Сохранено!", reply_markup=kb.admin_kb())
     await state.clear()
 
-# --- БЭКАП ---
 @dp.callback_query(F.data == "admin_backup", IsAdminFilter())
 async def admin_backup(c: CallbackQuery):
     await c.message.edit_text("📦 <b>Бэкап</b>\n\nСкачай файл или просто отправь сюда .db файл для восстановления.", reply_markup=kb.backup_kb())
@@ -699,10 +651,57 @@ async def backup_upload(message: Message):
         await message.answer("✅ База загружена! Перезапусти бота в панели BotHost.")
     except Exception as e: await message.answer(f"Ошибка: {e}")
 
-# ================= ВОРКЕРЫ =================
-async def manual_check_worker():
+@dp.callback_query(F.data == "admin_notify", IsAdminFilter())
+async def admin_notify(c: CallbackQuery):
+    await c.message.edit_text("🔔 <b>Уведомления</b>", reply_markup=kb.notify_menu_kb(db.get_notifies()))
+    await c.answer()
+
+@dp.callback_query(F.data.startswith("notify_del:"), IsAdminFilter())
+async def notify_del(c: CallbackQuery):
+    db.del_notify(int(c.data.split(":")[1]))
+    await c.answer("Удалено")
+    await admin_notify(c)
+
+@dp.callback_query(F.data == "notify_add", IsAdminFilter())
+async def notify_add(c: CallbackQuery, state: FSMContext):
+    await state.update_data(n_text="", n_media="", n_mtype="", n_btns="[]")
+    await c.message.edit_text("Отправь текст (или напиши /skip):", reply_markup=kb.back_admin_kb())
+    await state.set_state(AdminStates.w_n_text)
+    await c.answer()
+
+@dp.message(AdminStates.w_n_text, IsAdminFilter())
+async def n_text(m: Message, state: FSMContext):
+    if m.text != "/skip": await state.update_data(n_text=m.html_text)
+    await m.answer("Отправь фото/видео (или /skip):")
+    await state.set_state(AdminStates.w_n_media)
+
+@dp.message(AdminStates.w_n_media, IsAdminFilter())
+async def n_media(m: Message, state: FSMContext):
+    if m.photo: await state.update_data(n_media=m.photo[-1].file_id, n_mtype="photo")
+    elif m.video: await state.update_data(n_media=m.video.file_id, n_mtype="video")
+    elif m.text != "/skip": return await m.answer("Нужно фото/видео или /skip")
+    await m.answer("Отправь ссылки для кнопок (или /skip):")
+    await state.set_state(AdminStates.w_n_btns)
+
+@dp.message(AdminStates.w_n_btns, IsAdminFilter())
+async def n_btns(m: Message, state: FSMContext):
+    if m.text != "/skip":
+        await state.update_data(n_btns=json.dumps([[{"text": "Кнопка", "url": m.text, "color": "primary"}]]))
+    await m.answer("Введи интервал в часах (например 12):")
+    await state.set_state(AdminStates.w_n_int)
+
+@dp.message(AdminStates.w_n_int, IsAdminFilter())
+async def n_int(m: Message, state: FSMContext):
+    try:
+        h = int(m.text)
+        d = await state.get_data()
+        db.add_notify(d['n_text'], d['n_media'], d['n_mtype'], d['n_btns'], h)
+        await state.clear()
+        await m.answer("✅ Уведомление добавлено!", reply_markup=kb.admin_kb())
+    except Exception: await m.answer("Ошибка. Введи число.")
+        async def manual_check_worker():
     while True:
-        await asyncio.sleep(300) # Раз в 5 минут
+        await asyncio.sleep(300)
         try:
             tasks = db.get_manual_tasks()
             for t in tasks:
@@ -714,16 +713,15 @@ async def manual_check_worker():
                     db.add_task_completed(uid)
                     u = db.get_user(uid)
                     if u['referrer_id']:
-                        ref_percent = float(db.get_setting("ref_percent"))
-                        ref_bonus = round(t['reward'] * (ref_percent / 100), 2)
+                        ref_bonus = round(t['reward'] * (float(db.get_setting("ref_percent")) / 100), 2)
                         if ref_bonus > 0: db.add_ref_earning(u['referrer_id'], ref_bonus)
-                    try: await bot.send_message(uid, f"✅ Ваше задание на проверке подтверждено! Начислено: {fmt(t['reward'])} ⭐")
+                    try: await bot.send_message(uid, f"✅ Задание подтверждено! +{fmt(t['reward'])} ⭐")
                     except Exception: pass
         except Exception: pass
 
 async def sponsor_check_worker():
     while True:
-        await asyncio.sleep(3600) # Раз в час
+        await asyncio.sleep(3600)
         try:
             sponsors = db.get_sponsors()
             if not sponsors: continue
@@ -734,6 +732,10 @@ async def sponsor_check_worker():
                         member = await bot.get_chat_member(s['chat_id'], u['user_id'])
                         if member.status in ['left', 'kicked']:
                             if db.check_user_channel(u['user_id'], s['chat_id']):
+                                with db.get_conn() as conn:
+                                    conn.execute("DELETE FROM user_channels WHERE user_id=? AND chat_id=?", (u['user_id'], s['chat_id']))
+                                    conn.commit()
+                                
                                 penalty = float(db.get_setting("sponsor_penalty"))
                                 if penalty > 0:
                                     db.add_balance(u['user_id'], -penalty)
@@ -741,16 +743,36 @@ async def sponsor_check_worker():
                                     except Exception: pass
                                     if u['referrer_id']:
                                         db.add_balance(u['referrer_id'], -penalty)
-                                        try: await bot.send_message(u['referrer_id'], f"⚠️ Ваш реферал отписался от <b>{s['name']}</b>. Списано {fmt(penalty)} ⭐.")
+                                        try: await bot.send_message(u['referrer_id'], f"⚠️ Реферал отписался от <b>{s['name']}</b>. Списано {fmt(penalty)} ⭐.")
                                         except Exception: pass
                     except Exception: pass
         except Exception: pass
 
-# ================= ЗАПУСК =================
+async def notifier_worker():
+    while True:
+        await asyncio.sleep(60)
+        try:
+            notifies = db.get_notifies()
+            now = datetime.now()
+            for n in notifies:
+                if not n['last_sent'] or (now - datetime.fromisoformat(n['last_sent'])).total_seconds() >= n['interval_h'] * 3600:
+                    with db.get_conn() as conn: users = conn.execute("SELECT user_id FROM users WHERE is_banned=0").fetchall()
+                    for u in users:
+                        try:
+                            if n['media']:
+                                if n['mtype'] == 'photo': await bot.send_photo(u['user_id'], n['media'], caption=n['text'])
+                                else: await bot.send_video(u['user_id'], n['media'], caption=n['text'])
+                            else: await bot.send_message(u['user_id'], n['text'])
+                            await asyncio.sleep(0.05)
+                        except Exception: pass
+                    db.update_notify_time(n['id'], now.isoformat())
+        except Exception: pass
+
 async def main():
     db.init_db()
     asyncio.create_task(manual_check_worker())
     asyncio.create_task(sponsor_check_worker())
+    asyncio.create_task(notifier_worker())
     print("Бот успешно запущен!")
     await dp.start_polling(bot)
 

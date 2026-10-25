@@ -15,14 +15,12 @@ DEFAULTS = {
     "ref_percent": "15",
     "task_reward": "1.0",
     "sponsor_penalty": "5.0",
-    "withdraw_friends_required": "0",
     "menu_avatar": "",
-    
+
     "menu_text": (
         '<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> Забирай свою ссылку и приглашай друзей!\n\n'
         '<tg-emoji emoji-id="5280605017043118832">👥</tg-emoji> Ты получаешь <b>{ref_percent}%</b> с каждого задания друга <b>пожизненно</b>.'
     ),
-    
     "ref_text": (
         '<tg-emoji emoji-id="5372926953978341366">👥</tg-emoji> <b>Реферальная система</b>\n\n'
         'Приглашайте друзей и получайте <b>{ref_percent}%</b> от каждого выполненного ими задания пожизненно!\n\n'
@@ -32,7 +30,6 @@ DEFAULTS = {
         '• <b>Приглашено друзей:</b> {total_refs} чел.\n'
         '• <b>Доход с друзей:</b> {ref_earnings} <tg-emoji emoji-id="5435957248314579621">⭐️</tg-emoji>'
     ),
-    
     "profile_text": (
         '<tg-emoji emoji-id="5936017305585586269">🪪</tg-emoji> <b>Профиль</b>\n\n'
         'Ник: {username}\n\n'
@@ -43,14 +40,7 @@ DEFAULTS = {
         'Заданий выполнено: {tasks_completed}\n'
         '<b>Заработано с друзей: {ref_earnings} <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji></b>'
     ),
-    
-    "task_text": (
-        '<tg-emoji emoji-id="5422439311196834318">💡</tg-emoji> <b>Получай Звёзды за простые задания!</b> <tg-emoji emoji-id="5470177992950946662">👇</tg-emoji>\n\n'
-        '<tg-emoji emoji-id="5416081784641168838">🟢</tg-emoji> Подпишись и нажми «Подтвердить»\n\n'
-        'Вознаграждение: +<b>{reward}</b> <tg-emoji emoji-id="5469641199348363998">⭐</tg-emoji>\n'
-        '<i>(Твой реферер получит с этого {ref_percent}%)</i>'
-    ),
-    
     "withdraw_text": "💫 <b>Вывод</b>\nБаланс: {balance}⭐\n\nДоступно: {amounts}\n\nНапиши сумму или нажми кнопку.",
+    "task_text": "💡 <b>Задание</b>\nНаграда: +{reward}⭐",
     "sponsor_text": "⚠️ <b>Подпишись, чтобы продолжить</b>\n\n{sponsors}\n\nПотом жми «Проверить» ✅"
 }

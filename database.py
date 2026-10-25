@@ -10,7 +10,6 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         cur = conn.cursor()
-        # Безопасная очистка старых таблиц, которые ломали бота
         cur.execute("DROP TABLE IF EXISTS sponsors")
         cur.execute("DROP TABLE IF EXISTS user_sponsors")
         cur.execute("DROP TABLE IF EXISTS integrations")
@@ -120,3 +119,12 @@ def get_top_refs():
     with get_conn() as conn: return conn.execute("SELECT u.username, COUNT(r.user_id) as cnt FROM users u JOIN users r ON u.user_id = r.referrer_id GROUP BY u.user_id ORDER BY cnt DESC LIMIT 10").fetchall()
 def get_top_earn():
     with get_conn() as conn: return conn.execute("SELECT username, total_earned FROM users ORDER BY total_earned DESC LIMIT 10").fetchall()
+
+def get_notifies():
+    with get_conn() as conn: return conn.execute("SELECT * FROM notifies").fetchall()
+def add_notify(text, media, mtype, btns, int_h):
+    with get_conn() as conn: conn.execute("INSERT INTO notifies (text, media, mtype, btns, interval_h) VALUES (?, ?, ?, ?, ?)", (text, media, mtype, btns, int_h)); conn.commit()
+def del_notify(nid):
+    with get_conn() as conn: conn.execute("DELETE FROM notifies WHERE id=?", (nid,)); conn.commit()
+def update_notify_time(nid, t):
+    with get_conn() as conn: conn.execute("UPDATE notifies SET last_sent=? WHERE id=?", (t, nid)); conn.commit()

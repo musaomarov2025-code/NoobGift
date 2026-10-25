@@ -17,11 +17,17 @@ def init_db():
         cur.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, service TEXT, task_id TEXT, link TEXT, status TEXT DEFAULT 'pending')""")
         
-        # Миграции для старой базы
+        # Миграции для старой базы (users)
         cols = {r[1] for r in cur.execute("PRAGMA table_info(users)").fetchall()}
         if "debt" not in cols: cur.execute("ALTER TABLE users ADD COLUMN debt REAL DEFAULT 0.0")
         if "ref_earnings" not in cols: cur.execute("ALTER TABLE users ADD COLUMN ref_earnings REAL DEFAULT 0.0")
         if "total_withdrawn" not in cols: cur.execute("ALTER TABLE users ADD COLUMN total_withdrawn REAL DEFAULT 0.0")
+
+        # Миграции для старой базы (sponsors)
+        sp_cols = {r[1] for r in cur.execute("PRAGMA table_info(sponsors)").fetchall()}
+        if "name" not in sp_cols: cur.execute("ALTER TABLE sponsors ADD COLUMN name TEXT")
+        if "url" not in sp_cols: cur.execute("ALTER TABLE sponsors ADD COLUMN url TEXT")
+        if "chat_id" not in sp_cols: cur.execute("ALTER TABLE sponsors ADD COLUMN chat_id TEXT")
 
         for k, v in DEFAULTS.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))

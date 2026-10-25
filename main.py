@@ -202,7 +202,7 @@ async def menu_instruction(call: CallbackQuery):
     await send_av(call.message, db.get_setting("instruction_text"), kb.back_kb())
     await call.answer()
     
-    @dp.callback_query(F.data == "menu_earn")
+@dp.callback_query(F.data == "menu_earn")
 async def show_tasks(call: CallbackQuery, state: FSMContext):
     await state.clear()
     try: await call.message.delete()

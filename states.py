@@ -36,3 +36,6 @@ class AdminSG(StatesGroup):
 
     # Юзер — поиск
     user_search = State()
+    
+    user_balance = State()
+    bc_button = State()

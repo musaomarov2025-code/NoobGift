@@ -361,6 +361,7 @@ async def do_withdraw(uid: int, message: Message, amount: float):
     if not u: return await message.answer("❌ Ошибка.")
     if round(u['balance'], 2) < amount: return await message.answer(f"❌ Не хватает. Баланс: {fmt(u['balance'])} ⭐")
     wid = db.create_withdrawal(uid, amount)
+    if not wid: return await message.answer("❌ Не хватает средств.")
     txt = f'<tg-emoji emoji-id="5427009714745517609">✅</tg-emoji> Заявка <b>#{wid}</b> на <b>{fmt(amount)}</b> <tg-emoji emoji-id="5408869739982246969">⭐</tg-emoji> создана.\n\nСрок вывода: 5 минут — 24 часа.'
     await message.answer(txt, reply_markup=kb.back_kb())
     admin_msg = f"💸 <b>Заявка #{wid}</b>\n👤 @{u['username'] or 'нет'} (<code>{u['user_id']}</code>)\n💰 Сумма: {fmt(amount)}⭐\n👥 Рефов: {db.get_refs_count(uid)}\n🎯 Заданий: {u['tasks_completed']}\n💵 Остаток: {fmt(u['balance'] - amount)}⭐"
@@ -419,7 +420,7 @@ async def top_earn(call: CallbackQuery):
     except Exception: pass
     await call.message.answer(txt, reply_markup=kb.back_kb("menu_stats"))
     await call.answer()
-    @dp.message(Command("admin"), IsAdminFilter())
+@dp.message(Command("admin"), IsAdminFilter())
 async def admin_cmd(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb.admin_kb())
@@ -700,7 +701,7 @@ async def n_int(m: Message, state: FSMContext):
         await state.clear()
         await m.answer("✅ Уведомление добавлено!", reply_markup=kb.admin_kb())
     except Exception: await m.answer("Ошибка. Введи число.")
-        async def manual_check_worker():
+async def manual_check_worker():
     while True:
         await asyncio.sleep(300)
         try:

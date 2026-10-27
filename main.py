@@ -110,14 +110,11 @@ async def tr_check(uid, tid):
     return False
 
 async def get_new_task(uid):
-    try:
-        t = await tg_get(uid)
-        if t: return t
-        t = await pf_get(uid)
-        if t: return t
-        t = await tr_get(uid)
-        if t: return t
-    except Exception: pass
+    for fn in (tg_get, pf_get, tr_get):
+        try:
+            t = await fn(uid)
+            if t and str(t.get("link", "")).startswith("http"): return t
+        except Exception: pass
     return None
 
 async def check_task_status(srv, uid, tid):
@@ -183,6 +180,28 @@ async def cb_check_sponsors(call: CallbackQuery):
     else:
         await call.answer("❌ Вы подписались не на все каналы!", show_alert=True)
 
+@dp.message(Command("diag"), IsAdminFilter())
+async def diag_cmd(message: Message):
+    uid = message.from_user.id
+    checks = [
+        ("PiarFlow", bool(PIARFLOW_TOKEN), f"{PIARFLOW_URL}/sponsors", {"user_id": uid, "chat_id": uid, "max_sponsors": 1}, {"Authorization": f"Bearer {PIARFLOW_TOKEN}"}),
+        ("Tgrass", bool(TGRASS_TOKEN), "https://tgrass.space/tasks", {"tg_user_id": uid, "is_premium": False, "lang": "ru"}, {"Auth": TGRASS_TOKEN}),
+        ("Trafsly", bool(TRAFSLY_TOKEN), "https://api.trafsly.com/api/v1/get-sponsors", {"user_id": uid}, {"Auth": TRAFSLY_TOKEN}),
+    ]
+    out = []
+    async with aiohttp.ClientSession() as s:
+        for name, has_token, url, payload, headers in checks:
+            if not has_token:
+                out.append(f"{name}: токен пустой (проверь переменные в BotHost)")
+                continue
+            try:
+                async with s.post(url, json=payload, headers=headers, timeout=10) as r:
+                    body = (await r.text())[:200].replace("\n", " ")
+                    out.append(f"{name}: HTTP {r.status}\n{body}")
+            except Exception as e:
+                out.append(f"{name}: ОШИБКА {type(e).__name__}: {e}")
+    await message.answer("\n\n".join(out), parse_mode=None)
+
 async def send_main_menu(message: Message):
     t = safe_format(db.get_setting("menu_text"), ref_percent=db.get_setting("ref_percent"))
     await send_av(message, t, kb.main_menu_kb())
@@ -213,6 +232,9 @@ async def show_tasks(call: CallbackQuery, state: FSMContext):
 async def send_next_task(message: Message, uid: int):
     try:
         task = db.get_pending_task(uid)
+        if task and not str(task['link']).startswith("http"):
+            db.mark_task_status(task['id'], 'skipped')
+            task = None
         if task:
             txt = safe_format(db.get_setting("task_text"), reward=fmt(task['reward']))
             if task['service'] == "custom":
@@ -222,6 +244,7 @@ async def send_next_task(message: Message, uid: int):
         
         custom_tasks = db.get_custom_tasks()
         for ct in custom_tasks:
+            if not str(ct['url']).startswith("http"): continue
             if not db.check_user_channel(uid, ct['chat_id']):
                 db.save_task(uid, "custom", str(ct['id']), ct['url'], ct['reward'])
                 task = db.get_pending_task(uid)

@@ -3,16 +3,18 @@ from datetime import datetime
 from config import DB, DEFAULTS
 
 def get_conn():
-    conn = sqlite3.connect(DB, check_same_thread=False)
+    conn = sqlite3.connect(DB, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("DROP TABLE IF EXISTS sponsors")
         cur.execute("DROP TABLE IF EXISTS user_sponsors")
         cur.execute("DROP TABLE IF EXISTS integrations")
+        sp_cols = {r[1] for r in cur.execute("PRAGMA table_info(sponsors)").fetchall()}
+        if sp_cols and not {"name", "url", "chat_id"} <= sp_cols:
+            cur.execute("DROP TABLE sponsors")
 
         cur.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0, debt REAL DEFAULT 0.0, ref_earnings REAL DEFAULT 0.0, total_earned REAL DEFAULT 0.0, total_withdrawn REAL DEFAULT 0.0, tasks_completed INTEGER DEFAULT 0, referrer_id INTEGER, registered_at TEXT, is_banned INTEGER DEFAULT 0)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS sponsors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, url TEXT, chat_id TEXT)""")
@@ -89,8 +91,10 @@ def get_refs_count(uid):
 def create_withdrawal(uid, amount):
     with get_conn() as conn:
         cur = conn.cursor()
+        cur.execute("UPDATE users SET balance = balance - ?, total_withdrawn = total_withdrawn + ? WHERE user_id = ? AND ROUND(balance, 2) >= ?", (amount, amount, uid, amount))
+        if cur.rowcount == 0: return None
         cur.execute("INSERT INTO withdrawals (user_id, amount, created_at) VALUES (?, ?, ?)", (uid, amount, datetime.now().isoformat()))
-        conn.execute("UPDATE users SET balance = balance - ?, total_withdrawn = total_withdrawn + ? WHERE user_id = ?", (amount, amount, uid)); conn.commit()
+        conn.commit()
         return cur.lastrowid
 def set_withdrawal_status(wid, status):
     with get_conn() as conn: conn.execute("UPDATE withdrawals SET status=? WHERE id=?", (status, wid)); conn.commit()

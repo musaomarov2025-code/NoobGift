@@ -1,138 +1,549 @@
-import sqlite3
-from datetime import datetime
-from config import DB, DEFAULTS
+import json
+import os
+import asyncio
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Any
 
-def get_conn():
-    conn = sqlite3.connect(DB, check_same_thread=False, timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
+import config
 
-def init_db():
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("DROP TABLE IF EXISTS user_sponsors")
-        cur.execute("DROP TABLE IF EXISTS integrations")
-        sp_cols = {r[1] for r in cur.execute("PRAGMA table_info(sponsors)").fetchall()}
-        if sp_cols and not {"name", "url", "chat_id"} <= sp_cols:
-            cur.execute("DROP TABLE sponsors")
+_lock = asyncio.Lock()
 
-        cur.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0, debt REAL DEFAULT 0.0, ref_earnings REAL DEFAULT 0.0, total_earned REAL DEFAULT 0.0, total_withdrawn REAL DEFAULT 0.0, tasks_completed INTEGER DEFAULT 0, referrer_id INTEGER, registered_at TEXT, is_banned INTEGER DEFAULT 0)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS sponsors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, url TEXT, chat_id TEXT)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS custom_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, url TEXT, chat_id TEXT, reward REAL)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS user_channels (user_id INTEGER, chat_id TEXT, type TEXT, PRIMARY KEY (user_id, chat_id))""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS withdrawals (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, status TEXT DEFAULT 'pending', created_at TEXT)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, service TEXT, task_id TEXT, link TEXT, reward REAL, status TEXT DEFAULT 'pending')""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS notifies (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, media TEXT, mtype TEXT, btns TEXT, interval_h REAL, last_sent TEXT)""")
+DEFAULT = {
+    "users": {},
+    "withdrawals": [],
+    "promocodes": {},
+    "ads": {},
+    "greeting": {
+        "text": "👋 Добро пожаловать!\n\n⭐️ Зарабатывай Telegram Stars, выполняя задания.",
+        "media": None,
+        "buttons": [],  # [{"text": "...", "url": "...", "color": "success|danger|primary"}]
+    },
+    "settings": {
+        "ref_percent": 10,
+        "task_reward": 0.4,
+        "withdraw_channel": "",
+        "withdraw_counter": 0,
+        "services_enabled": {
+            "botohub": True, "tgrass": True, "traffy": True,
+            "trafsly": True, "piarflow": True,
+        },
+        "service_keys": {
+            "botohub": "", "tgrass": "", "traffy": "",
+            "trafsly": "", "piarflow": "",
+        },
+    },
+    "stats": {
+        "total_users": 0,
+        "new_today": 0,
+        "new_today_date": "",
+        "tasks_done_total": 0,
+        "tasks_done_today": 0,
+        "tasks_done_yesterday": 0,
+        "refs_total": 0,
+        "withdrawn_total": 0.0,
+        "hold_total": 0.0,
+        "unsubscribed_total": 0,
+    },
+}
 
-        cols = {r[1] for r in cur.execute("PRAGMA table_info(users)").fetchall()}
-        if "debt" not in cols: cur.execute("ALTER TABLE users ADD COLUMN debt REAL DEFAULT 0.0")
-        if "ref_earnings" not in cols: cur.execute("ALTER TABLE users ADD COLUMN ref_earnings REAL DEFAULT 0.0")
-        if "total_withdrawn" not in cols: cur.execute("ALTER TABLE users ADD COLUMN total_withdrawn REAL DEFAULT 0.0")
+_data: Optional[dict] = None
 
-        for k, v in DEFAULTS.items():
-            cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
-        if not cur.execute("SELECT 1 FROM settings WHERE key='emoji_v1'").fetchone():
-            for k in ("task_text", "withdraw_text", "sponsor_text"):
-                cur.execute("UPDATE settings SET value=? WHERE key=? AND value NOT LIKE '%<tg-emoji%'", (str(DEFAULTS[k]), k))
-            cur.execute("INSERT INTO settings (key, value) VALUES ('emoji_v1', '1')")
-        conn.commit()
 
-def get_setting(k):
-    with get_conn() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (k,)).fetchone()
-        return row['value'] if row else DEFAULTS.get(k, "")
-def set_setting(k, v):
-    with get_conn() as conn: conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, str(v))); conn.commit()
+# ============ ВНУТРЕННИЕ ============
 
-def get_user(uid):
-    with get_conn() as conn: return conn.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
-def get_user_by_username(uname):
-    with get_conn() as conn: return conn.execute("SELECT * FROM users WHERE username=?", (uname.replace('@',''),)).fetchone()
-def add_user(uid, uname, ref_id=None):
-    with get_conn() as conn:
-        if conn.execute("SELECT 1 FROM users WHERE user_id=?", (uid,)).fetchone(): return False
-        conn.execute("INSERT INTO users (user_id, username, referrer_id, registered_at) VALUES (?, ?, ?, ?)", (uid, uname, ref_id, datetime.now().isoformat()))
-        conn.commit(); return True
-def update_username(uid, uname):
-    with get_conn() as conn: conn.execute("UPDATE users SET username=? WHERE user_id=?", (uname, uid)); conn.commit()
-def toggle_ban(uid, ban):
-    with get_conn() as conn: conn.execute("UPDATE users SET is_banned=? WHERE user_id=?", (ban, uid)); conn.commit()
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
-def add_balance(uid, amount):
-    with get_conn() as conn:
-        u = conn.execute("SELECT debt FROM users WHERE user_id=?", (uid,)).fetchone()
-        debt = u['debt'] if u else 0
-        if debt > 0 and amount > 0:
-            if amount >= debt: amount -= debt; conn.execute("UPDATE users SET debt=0 WHERE user_id=?", (uid,))
-            else: debt -= amount; amount = 0; conn.execute("UPDATE users SET debt=? WHERE user_id=?", (debt, uid))
-        conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?", (round(amount, 2), round(amount, 2), uid)); conn.commit()
-def add_ref_earning(ref_id, amount):
-    with get_conn() as conn: conn.execute("UPDATE users SET balance = balance + ?, ref_earnings = ref_earnings + ?, total_earned = total_earned + ? WHERE user_id = ?", (round(amount, 2), round(amount, 2), round(amount, 2), ref_id)); conn.commit()
 
-def add_sponsor(name, url, chat_id):
-    with get_conn() as conn: conn.execute("INSERT INTO sponsors (name, url, chat_id) VALUES (?, ?, ?)", (name, url, chat_id)); conn.commit()
-def get_sponsors():
-    with get_conn() as conn: return conn.execute("SELECT * FROM sponsors").fetchall()
-def del_sponsor(sid):
-    with get_conn() as conn: conn.execute("DELETE FROM sponsors WHERE id=?", (sid,)); conn.commit()
+def _iso(dt: datetime) -> str:
+    return dt.isoformat()
 
-def add_custom_task(name, url, chat_id, reward):
-    with get_conn() as conn: conn.execute("INSERT INTO custom_tasks (name, url, chat_id, reward) VALUES (?, ?, ?, ?)", (name, url, chat_id, reward)); conn.commit()
-def get_custom_tasks():
-    with get_conn() as conn: return conn.execute("SELECT * FROM custom_tasks").fetchall()
-def del_custom_task(tid):
-    with get_conn() as conn: conn.execute("DELETE FROM custom_tasks WHERE id=?", (tid,)); conn.commit()
 
-def mark_user_channel(uid, chat_id, ctype):
-    with get_conn() as conn: conn.execute("INSERT OR IGNORE INTO user_channels (user_id, chat_id, type) VALUES (?, ?, ?)", (uid, str(chat_id), ctype)); conn.commit()
-def check_user_channel(uid, chat_id):
-    with get_conn() as conn: return conn.execute("SELECT 1 FROM user_channels WHERE user_id=? AND chat_id=?", (uid, str(chat_id))).fetchone() is not None
+def _parse(s: str) -> datetime:
+    return datetime.fromisoformat(s)
 
-def get_refs_count(uid):
-    with get_conn() as conn: return conn.execute("SELECT COUNT(*) as cnt FROM users WHERE referrer_id=?", (uid,)).fetchone()['cnt']
 
-def create_withdrawal(uid, amount):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("UPDATE users SET balance = balance - ?, total_withdrawn = total_withdrawn + ? WHERE user_id = ? AND ROUND(balance, 2) >= ?", (amount, amount, uid, amount))
-        if cur.rowcount == 0: return None
-        cur.execute("INSERT INTO withdrawals (user_id, amount, created_at) VALUES (?, ?, ?)", (uid, amount, datetime.now().isoformat()))
-        conn.commit()
-        return cur.lastrowid
-def set_withdrawal_status(wid, status):
-    with get_conn() as conn: conn.execute("UPDATE withdrawals SET status=? WHERE id=?", (status, wid)); conn.commit()
-def get_pending_withdrawals():
-    with get_conn() as conn: return conn.execute("SELECT * FROM withdrawals WHERE status='pending'").fetchall()
-def get_withdrawal(wid):
-    with get_conn() as conn: return conn.execute("SELECT * FROM withdrawals WHERE id=?", (wid,)).fetchone()
+def _load():
+    global _data
+    if _data is not None:
+        return
+    if os.path.exists(config.DB_PATH):
+        try:
+            with open(config.DB_PATH, "r", encoding="utf-8") as f:
+                _data = json.load(f)
+        except Exception:
+            _data = json.loads(json.dumps(DEFAULT))
+    else:
+        _data = json.loads(json.dumps(DEFAULT))
 
-def save_task(uid, srv, tid, link, reward):
-    with get_conn() as conn: conn.execute("INSERT INTO tasks (user_id, service, task_id, link, reward) VALUES (?, ?, ?, ?, ?)", (uid, srv, tid, link, reward)); conn.commit()
-def get_pending_task(uid):
-    with get_conn() as conn: return conn.execute("SELECT * FROM tasks WHERE user_id=? AND status='pending' LIMIT 1", (uid,)).fetchone()
-def get_manual_tasks():
-    with get_conn() as conn: return conn.execute("SELECT * FROM tasks WHERE status='manual'").fetchall()
-def mark_task_status(tid, status):
-    with get_conn() as conn: conn.execute("UPDATE tasks SET status=? WHERE id=?", (status, tid)); conn.commit()
-def add_task_completed(uid):
-    with get_conn() as conn: conn.execute("UPDATE users SET tasks_completed = tasks_completed + 1 WHERE user_id=?", (uid,)); conn.commit()
+    # merge недостающих ключей
+    for k, v in DEFAULT.items():
+        if k not in _data:
+            _data[k] = v
+    for k, v in DEFAULT["settings"].items():
+        if k not in _data["settings"]:
+            _data["settings"][k] = v
+    for k, v in DEFAULT["stats"].items():
+        if k not in _data["stats"]:
+            _data["stats"][k] = v
 
-def get_stats():
-    with get_conn() as conn:
-        return {"total": conn.execute("SELECT COUNT(*) FROM users").fetchone()[0], "today": conn.execute("SELECT COUNT(*) FROM users WHERE registered_at LIKE ?", (str(datetime.now().date()) + "%",)).fetchone()[0], "total_bal": conn.execute("SELECT SUM(balance) FROM users").fetchone()[0] or 0, "pending_wd": conn.execute("SELECT SUM(amount) FROM withdrawals WHERE status='pending'").fetchone()[0] or 0}
-def get_top_balance():
-    with get_conn() as conn: return conn.execute("SELECT username, balance FROM users ORDER BY balance DESC LIMIT 10").fetchall()
-def get_top_refs():
-    with get_conn() as conn: return conn.execute("SELECT u.username, COUNT(r.user_id) as cnt FROM users u JOIN users r ON u.user_id = r.referrer_id GROUP BY u.user_id ORDER BY cnt DESC LIMIT 10").fetchall()
-def get_top_earn():
-    with get_conn() as conn: return conn.execute("SELECT username, total_earned FROM users ORDER BY total_earned DESC LIMIT 10").fetchall()
 
-def get_notifies():
-    with get_conn() as conn: return conn.execute("SELECT * FROM notifies").fetchall()
-def add_notify(text, media, mtype, btns, int_h):
-    with get_conn() as conn: conn.execute("INSERT INTO notifies (text, media, mtype, btns, interval_h) VALUES (?, ?, ?, ?, ?)", (text, media, mtype, btns, int_h)); conn.commit()
-def del_notify(nid):
-    with get_conn() as conn: conn.execute("DELETE FROM notifies WHERE id=?", (nid,)); conn.commit()
-def update_notify_time(nid, t):
-    with get_conn() as conn: conn.execute("UPDATE notifies SET last_sent=? WHERE id=?", (t, nid)); conn.commit()
+def _save():
+    tmp = config.DB_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(_data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, config.DB_PATH)
+
+
+async def init():
+    async with _lock:
+        _load()
+        today = _now().strftime("%Y-%m-%d")
+        if _data["stats"].get("new_today_date") != today:
+            _data["stats"]["tasks_done_yesterday"] = _data["stats"].get("tasks_done_today", 0)
+            _data["stats"]["tasks_done_today"] = 0
+            _data["stats"]["new_today"] = 0
+            _data["stats"]["new_today_date"] = today
+            _save()
+
+
+# ============ ПОЛЬЗОВАТЕЛИ ============
+
+async def get_user(user_id: int) -> Optional[dict]:
+    async with _lock:
+        _load()
+        return _data["users"].get(str(user_id))
+
+
+async def user_exists(user_id: int) -> bool:
+    async with _lock:
+        _load()
+        return str(user_id) in _data["users"]
+
+
+async def create_user(user_id: int, username: Optional[str],
+                      first_name: str, referrer_id: Optional[int] = None) -> dict:
+    async with _lock:
+        _load()
+        uid = str(user_id)
+        if uid in _data["users"]:
+            return _data["users"][uid]
+
+        # реферер существует и это не сам юзер
+        if referrer_id and str(referrer_id) == uid:
+            referrer_id = None
+
+        user = {
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name or "",
+            "balance": 0.0,
+            "hold": 0.0,
+            "total_withdrawn": 0.0,
+            "referrer_id": referrer_id,
+            "refs_count": 0,
+            "refs_earned": 0.0,
+            "tasks_done": 0,
+            "reg_date": _iso(_now()),
+            "is_banned": False,
+            "is_fake_botohub": False,
+            "skipped_tasks": [],
+            "hold_items": [],
+        }
+        _data["users"][uid] = user
+
+        # обновляем статистику
+        st = _data["stats"]
+        st["total_users"] = len(_data["users"])
+        st["new_today"] += 1
+
+        # начисляем рефереру +1 реф
+        if referrer_id:
+            ref = _data["users"].get(str(referrer_id))
+            if ref:
+                ref["refs_count"] += 1
+                st["refs_total"] += 1
+
+        _save()
+        return user
+
+
+async def update_user(user_id: int, **fields):
+    async with _lock:
+        _load()
+        u = _data["users"].get(str(user_id))
+        if not u:
+            return
+        for k, v in fields.items():
+            u[k] = v
+        _save()
+
+
+async def add_balance(user_id: int, amount: float):
+    async with _lock:
+        _load()
+        u = _data["users"].get(str(user_id))
+        if not u:
+            return
+        u["balance"] = round(u["balance"] + amount, 4)
+        _save()
+
+
+async def add_hold(user_id: int, amount: float, kind: str = "task",
+                   from_user: Optional[int] = None,
+                   task_id: Optional[str] = None, hours: int = 24):
+    """kind: 'task' | 'ref'"""
+    async with _lock:
+        _load()
+        u = _data["users"].get(str(user_id))
+        if not u:
+            return
+        unlock = _now() + timedelta(hours=hours)
+        u["hold"] = round(u["hold"] + amount, 4)
+        u["hold_items"].append({
+            "amount": round(amount, 4),
+            "kind": kind,
+            "from_user": from_user,
+            "task_id": task_id,
+            "created_at": _iso(_now()),
+            "unlock_at": _iso(unlock),
+        })
+        _data["stats"]["hold_total"] = round(_data["stats"].get("hold_total", 0) + amount, 4)
+        _save()
+
+
+async def process_holds() -> list[tuple[int, float, str]]:
+    """Переводит созревший холд на баланс. Возвращает [(user_id, amount, kind)]."""
+    released = []
+    async with _lock:
+        _load()
+        now = _now()
+        for uid, u in _data["users"].items():
+            remaining = []
+            for item in u.get("hold_items", []):
+                try:
+                    unlock = _parse(item["unlock_at"])
+                except Exception:
+                    continue
+                if unlock <= now:
+                    amount = float(item["amount"])
+                    u["balance"] = round(u["balance"] + amount, 4)
+                    u["hold"] = round(max(0, u["hold"] - amount), 4)
+                    released.append((int(uid), amount, item.get("kind", "task")))
+                else:
+                    remaining.append(item)
+            if len(remaining) != len(u.get("hold_items", [])):
+                u["hold_items"] = remaining
+        if released:
+            _save()
+    return released
+
+
+async def punish_unsubscribe(user_id: int, task_id: str):
+    """Юзер отписался от канала — забираем оплату + % реферера."""
+    async with _lock:
+        _load()
+        u = _data["users"].get(str(user_id))
+        if not u:
+            return None
+
+        removed_total = 0.0
+        remaining = []
+        for item in u.get("hold_items", []):
+            if item.get("task_id") == task_id and item.get("kind") == "task":
+                amount = float(item["amount"])
+                u["hold"] = round(max(0, u["hold"] - amount), 4)
+                removed_total += amount
+                # забираем у реферера
+                ref_id = u.get("referrer_id")
+                if ref_id:
+                    ref = _data["users"].get(str(ref_id))
+                    if ref:
+                        for ri in ref.get("hold_items", []):
+                            if ri.get("kind") == "ref" and ri.get("from_user") == user_id \
+                               and ri.get("task_id") == task_id:
+                                u2_amount = float(ri["amount"])
+                                ref["hold"] = round(max(0, ref["hold"] - u2_amount), 4)
+                                removed_total += u2_amount
+                                break
+                        ref["hold_items"] = [
+                            ri for ri in ref.get("hold_items", [])
+                            if not (ri.get("kind") == "ref"
+                                    and ri.get("from_user") == user_id
+                                    and ri.get("task_id") == task_id)
+                        ]
+            else:
+                remaining.append(item)
+        u["hold_items"] = remaining
+        _data["stats"]["unsubscribed_total"] = _data["stats"].get("unsubscribed_total", 0) + 1
+        _save()
+        return removed_total
+
+
+async def increment_tasks_done(user_id: int):
+    async with _lock:
+        _load()
+        u = _data["users"].get(str(user_id))
+        if u:
+            u["tasks_done"] += 1
+        _data["stats"]["tasks_done_total"] += 1
+        _data["stats"]["tasks_done_today"] += 1
+        _save()
+
+
+async def add_ref_earned(user_id: int, amount: float):
+    async with _lock:
+        _load()
+        u = _data["users"].get(str(user_id))
+        if u:
+            u["refs_earned"] = round(u["refs_earned"] + amount, 4)
+            _save()
+
+
+# ============ НАСТРОЙКИ ============
+
+async def get_setting(key: str, default=None):
+    async with _lock:
+        _load()
+        return _data["settings"].get(key, default)
+
+
+async def set_setting(key: str, value: Any):
+    async with _lock:
+        _load()
+        _data["settings"][key] = value
+        _save()
+
+
+async def get_service_enabled(name: str) -> bool:
+    async with _lock:
+        _load()
+        return bool(_data["settings"]["services_enabled"].get(name, False))
+
+
+async def set_service_enabled(name: str, enabled: bool):
+    async with _lock:
+        _load()
+        _data["settings"]["services_enabled"][name] = enabled
+        _save()
+
+
+async def get_service_key(name: str) -> str:
+    async with _lock:
+        _load()
+        return _data["settings"]["service_keys"].get(name, "")
+
+
+async def set_service_key(name: str, key: str):
+    async with _lock:
+        _load()
+        _data["settings"]["service_keys"][name] = key
+        _save()
+
+
+# ============ СТАТИСТИКА ============
+
+async def get_stats() -> dict:
+    async with _lock:
+        _load()
+        return dict(_data["stats"])
+
+
+# ============ ЗАЯВКИ НА ВЫВОД ============
+
+async def create_withdrawal(user_id: int, username: Optional[str],
+                            first_name: str, amount: float) -> dict:
+    async with _lock:
+        _load()
+        u = _data["users"].get(str(user_id))
+        if not u or u["balance"] < amount:
+            return {"error": "not_enough"}
+
+        # списываем сразу (Вариант А)
+        u["balance"] = round(u["balance"] - amount, 4)
+
+        _data["settings"]["withdraw_counter"] += 1
+        wid = _data["settings"]["withdraw_counter"]
+
+        w = {
+            "id": wid,
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name,
+            "amount": round(amount, 4),
+            "status": "pending",  # pending | accepted | rejected
+            "created_at": _iso(_now()),
+            "channel_msg_id": None,
+        }
+        _data["withdrawals"].append(w)
+        _save()
+        return w
+
+
+async def get_withdrawal(wid: int) -> Optional[dict]:
+    async with _lock:
+        _load()
+        for w in _data["withdrawals"]:
+            if w["id"] == wid:
+                return dict(w)
+        return None
+
+
+async def list_withdrawals(status: Optional[str] = None) -> list[dict]:
+    async with _lock:
+        _load()
+        items = _data["withdrawals"]
+        if status:
+            items = [w for w in items if w["status"] == status]
+        return [dict(w) for w in items]
+
+
+async def update_withdrawal(wid: int, status: str):
+    async with _lock:
+        _load()
+        for w in _data["withdrawals"]:
+            if w["id"] == wid:
+                w["status"] = status
+                if status == "accepted":
+                    u = _data["users"].get(str(w["user_id"]))
+                    if u:
+                        u["total_withdrawn"] = round(u["total_withdrawn"] + w["amount"], 4)
+                        _data["stats"]["withdrawn_total"] = round(
+                            _data["stats"].get("withdrawn_total", 0) + w["amount"], 4
+                        )
+                elif status == "rejected":
+                    u = _data["users"].get(str(w["user_id"]))
+                    if u:
+                        u["balance"] = round(u["balance"] + w["amount"], 4)
+                _save()
+                return True
+        return False
+
+
+async def set_withdrawal_msg(wid: int, msg_id: int):
+    async with _lock:
+        _load()
+        for w in _data["withdrawals"]:
+            if w["id"] == wid:
+                w["channel_msg_id"] = msg_id
+                _save()
+                return
+
+
+# ============ ПРОМОКОДЫ ============
+
+async def create_promocode(code: str, amount: float, limit: int) -> dict:
+    async with _lock:
+        _load()
+        if code in _data["promocodes"]:
+            return {"error": "exists"}
+        _data["promocodes"][code] = {
+            "code": code,
+            "amount": round(amount, 4),
+            "limit": limit,
+            "used": 0,
+            "users": [],
+        }
+        _save()
+        return _data["promocodes"][code]
+
+
+async def use_promocode(code: str, user_id: int) -> dict:
+    async with _lock:
+        _load()
+        p = _data["promocodes"].get(code)
+        if not p:
+            return {"error": "not_found"}
+        if user_id in p["users"]:
+            return {"error": "already_used"}
+        if p["used"] >= p["limit"]:
+            return {"error": "limit_reached"}
+
+        p["used"] += 1
+        p["users"].append(user_id)
+
+        u = _data["users"].get(str(user_id))
+        if u:
+            u["balance"] = round(u["balance"] + p["amount"], 4)
+        _save()
+        return {"amount": p["amount"]}
+
+
+async def get_promocodes() -> list[dict]:
+    async with _lock:
+        _load()
+        return list(_data["promocodes"].values())
+
+
+# ============ РЕКЛАМА ============
+
+async def create_ad(owner_id: int, name: str, price: float) -> dict:
+    async with _lock:
+        _load()
+        code = f"ad{len(_data['ads']) + 1}"
+        while code in _data["ads"]:
+            code += "_"
+        _data["ads"][code] = {
+            "code": code,
+            "owner_id": owner_id,
+            "name": name,
+            "price": round(price, 4),
+            "clicks": 0,
+            "tasks_done": 0,
+            "created_at": _iso(_now()),
+        }
+        _save()
+        return _data["ads"][code]
+
+
+async def get_ad(code: str) -> Optional[dict]:
+    async with _lock:
+        _load()
+        return _data["ads"].get(code)
+
+
+async def incr_ad_stat(code: str, field: str):
+    async with _lock:
+        _load()
+        ad = _data["ads"].get(code)
+        if ad and field in ad:
+            ad[field] += 1
+            _save()
+
+
+async def list_ads() -> list[dict]:
+    async with _lock:
+        _load()
+        return list(_data["ads"].values())
+
+
+# ============ ПРИВЕТКА ============
+
+async def get_greeting() -> dict:
+    async with _lock:
+        _load()
+        return dict(_data["greeting"])
+
+
+async def set_greeting(**kwargs):
+    async with _lock:
+        _load()
+        for k, v in kwargs.items():
+            _data["greeting"][k] = v
+        _save()
+
+
+# ============ БЭКАП ============
+
+async def export_data() -> dict:
+    async with _lock:
+        _load()
+        return json.loads(json.dumps(_data))
+
+
+async def import_data(new_data: dict):
+    global _data
+    async with _lock:
+        _data = new_data
+        _load()  # merge defaults
+        _save()

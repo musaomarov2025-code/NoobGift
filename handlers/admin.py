@@ -132,29 +132,50 @@ async def adm_wd_skip(callback: CallbackQuery):
 async def adm_wd_accept(callback: CallbackQuery, bot: Bot):
     wid = int(callback.data.split("_")[-1])
     w = await db.get_withdrawal(wid)
-    if not w or w["status"] != "pending": return await callback.answer("Обработана", show_alert=True)
+    if not w or w["status"] != "pending": 
+        return await callback.answer("Обработана", show_alert=True)
+        
     await db.update_withdrawal(wid, "accepted")
+    
     channel = await db.get_setting("withdraw_channel")
     if channel:
-        try: await bot.send_message(channel, texts.withdrawal_channel_paid_text(wid, w["username"], w["user_id"], w["amount"]))
-        except: pass
-    try: await bot.send_message(w["user_id"], f"✅ Заявка #{wid} выплачена!")
-    except: pass
+        try: 
+            await bot.send_message(channel, texts.withdrawal_channel_paid_text(wid, w["username"], w["user_id"], w["amount"]))
+        except Exception as e: 
+            # Если бот не смог написать в канал, он сообщит об этом тебе в ЛС
+            await callback.message.answer(f"⚠️ Ошибка при отправке в канал (проверь права бота): {e}")
+            
+    try: 
+        await bot.send_message(w["user_id"], f"✅ Заявка #{wid} выплачена!")
+    except: 
+        pass
+        
     await callback.message.edit_text(f"✅ Заявка #{wid} принята.", reply_markup=keyboards.admin_back_kb())
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("adm_wd_reject_"))
 async def adm_wd_reject(callback: CallbackQuery, bot: Bot):
     wid = int(callback.data.split("_")[-1])
     w = await db.get_withdrawal(wid)
-    if not w or w["status"] != "pending": return await callback.answer("Обработана", show_alert=True)
+    if not w or w["status"] != "pending": 
+        return await callback.answer("Обработана", show_alert=True)
+        
     await db.update_withdrawal(wid, "rejected")
+    
     channel = await db.get_setting("withdraw_channel")
     if channel:
-        try: await bot.send_message(channel, texts.withdrawal_channel_reject_text(wid, w["username"], w["user_id"], w["amount"]))
-        except: pass
-    try: await bot.send_message(w["user_id"], texts.withdrawal_rejected_user_text(wid, w["amount"]))
-    except: pass
+        try: 
+            await bot.send_message(channel, texts.withdrawal_channel_reject_text(wid, w["username"], w["user_id"], w["amount"]))
+        except Exception as e: 
+            # Сообщаем тебе, если канал не отвечает
+            await callback.message.answer(f"⚠️ Ошибка при отправке в канал (проверь права бота): {e}")
+            
+    try: 
+        await bot.send_message(w["user_id"], texts.withdrawal_rejected_user_text(wid, w["amount"]))
+    except: 
+        pass
+        
     await callback.message.edit_text(f"❌ Заявка #{wid} отклонена.", reply_markup=keyboards.admin_back_kb())
     await callback.answer()
 

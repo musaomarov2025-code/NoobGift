@@ -16,7 +16,10 @@ def ref_link(bot_username: str, user_id: int) -> str:
 def referral_kb(bot_username: str, user_id: int) -> InlineKeyboardMarkup:
     link = ref_link(bot_username, user_id)
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Отправить ссылку друзьям", switch_inline_query=f"🎁 Заходи в бота, тут раздают звёзды ⭐️\n\n{link}")],
+        [InlineKeyboardButton(
+            text="🔗 Отправить ссылку друзьям", 
+            switch_inline_query=f"Заходи в бота, тут раздают звёзды ⭐️\n\n{link}"
+        )],
         [InlineKeyboardButton(text="📋 Скопировать ссылку", callback_data="copy_ref")],
     ])
 

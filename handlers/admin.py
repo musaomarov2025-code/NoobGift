@@ -30,16 +30,22 @@ async def cmd_test_api(message: Message):
     if not services:
         return await message.answer("❌ Нет активных сервисов (включи их и добавь ключи в админке).")
     
+    # ПОЛУЧАЕМ СЛОВАРЬ ЮЗЕРА ИЗ БАЗЫ (а не просто число)
+    user = await db.get_user(message.from_user.id)
+    if not user:
+        return await message.answer("❌ Юзер не найден в базе. Напиши /start")
+    
     res_text = "<b>Результаты API:</b>\n\n"
     for s in services:
         try:
-            tasks = await s.get_tasks(message.from_user.id)
+            # Передаем в сервис объект user (словарь)
+            tasks = await s.get_tasks(user)
             res_text += f"<b>{s.name}</b>: получено {len(tasks)} заданий.\n"
         except Exception as e:
             res_text += f"<b>{s.name}</b>: ОШИБКА - {e}\n"
     
     await message.answer(res_text)
-
+    
 @router.callback_query(F.data == "adm_back")
 async def cb_admin_back(callback: CallbackQuery, state: FSMContext):
     await state.clear()

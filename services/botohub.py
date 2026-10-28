@@ -6,7 +6,7 @@ log = logging.getLogger("services.botohub")
 
 class BotohubService(BaseService):
     name = "botohub"
-    URL = "https://botohub.me/get-tasks"
+    URL = "https://botohub.me/api/get-tasks"
     TIMEOUT = aiohttp.ClientTimeout(total=15)
 
     async def get_tasks(self, user: dict) -> list[Task]:
@@ -15,7 +15,9 @@ class BotohubService(BaseService):
         try:
             async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
                 async with s.post(self.URL, json=payload) as r:
-                    if r.status != 200: return []
+                    if r.status not in (200, 201):
+                        log.error(f"Botohub API Error {r.status}: {await r.text()}")
+                        return []
                     data = await r.json()
         except Exception as e:
             log.warning(f"botohub get_tasks: {e}")

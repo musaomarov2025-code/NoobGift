@@ -1,5 +1,5 @@
 STAR_MESSAGE = "⭐️"
-MENU_TEXT = "📋 <b>Главное меню</b>\n\nВыбери действие:"
+MENU_TEXT = "Главное меню 👇"
 DEFAULT_GREETING = "👋 <b>Добро пожаловать!</b>\n\n⭐️ Здесь ты зарабатываешь Telegram Stars.\n👥 Приглашай друзей и получай %.\n💎 Выводи звёзды прямо в Telegram."
 
 def profile_text(user: dict) -> str:

@@ -6,7 +6,7 @@ log = logging.getLogger("services.trafsly")
 
 class TrafslyService(BaseService):
     name = "trafsly"
-    BASE = "https://trafsly.com/api" # Изменили на trafsly.com/api
+    BASE = "https://api.trafsly.com"
     TIMEOUT = aiohttp.ClientTimeout(total=15)
 
     async def get_tasks(self, user: dict) -> list[Task]:

@@ -14,10 +14,10 @@ class PiarFlowService(BaseService):
         payload = {
             "user_id": user["user_id"],
             "chat_id": user["user_id"],
+            "max_sponsors": 5,
             "first_name": user.get("first_name") or "",
             "username": user.get("username") or "",
             "language_code": "ru",
-            "max_sponsors": 5,
         }
         try:
             async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
@@ -32,9 +32,9 @@ class PiarFlowService(BaseService):
 
         return [
             Task(
-                task_id=t.get("link"), 
-                url=t.get("link"), 
-                title="Канал", 
+                task_id=t.get("link"),
+                url=t.get("link"),
+                title="Канал",
                 service=self.name
             )
             for t in data.get("sponsors", []) if t.get("status") == "unsubscribed"
@@ -52,6 +52,7 @@ class PiarFlowService(BaseService):
         except Exception as e:
             log.warning(f"piarflow check: {e}")
             return False
+        
         for sp in data.get("sponsors", []):
             if sp.get("link") == task_id and sp.get("status") == "subscribed":
                 return True

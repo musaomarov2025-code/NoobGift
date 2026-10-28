@@ -13,14 +13,25 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
 def ref_link(bot_username: str, user_id: int) -> str:
     return f"https://t.me/{bot_username}?start={user_id}"
 
+from aiogram.types import CopyTextButton
+
 def referral_kb(bot_username: str, user_id: int) -> InlineKeyboardMarkup:
     link = ref_link(bot_username, user_id)
+    share_url = f"https://t.me/share/url?url={link}&text=Заходи в бота, тут раздают звёзды ⭐️"
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔗 Отправить ссылку друзьям", url=share_url)],
         [InlineKeyboardButton(
-            text="🔗 Отправить ссылку друзьям", 
-            switch_inline_query=f"Заходи в бота, тут раздают звёзды ⭐️\n\n{link}"
+            text="📋 Скопировать ссылку", 
+            copy_text=CopyTextButton(text=link)
         )],
-        [InlineKeyboardButton(text="📋 Скопировать ссылку", callback_data="copy_ref")],
+    ])
+
+def tasks_finished_kb(bot_username: str, user_id: int) -> InlineKeyboardMarkup:
+    link = ref_link(bot_username, user_id)
+    share_url = f"https://t.me/share/url?url={link}&text=Заходи в бота, тут раздают звёзды ⭐️"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Пригласить друзей", url=share_url)],
+        [InlineKeyboardButton(text="🔙 В меню", callback_data="back_menu")]
     ])
 
 def withdraw_kb() -> InlineKeyboardMarkup:

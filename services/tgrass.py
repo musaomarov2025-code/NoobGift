@@ -6,11 +6,10 @@ log = logging.getLogger("services.tgrass")
 
 class TgrassService(BaseService):
     name = "tgrass"
-    URL = "https://tgrass.space/api/offers" # Точный URL из доков
+    URL = "https://tgrass.space/offers"
     TIMEOUT = aiohttp.ClientTimeout(total=15)
 
     async def get_tasks(self, user: dict) -> list[Task]:
-        # Из доков Tgrass: ключ передается в заголовке Auth
         headers = {"Content-Type": "application/json", "Auth": self.api_key}
         payload = {
             "tg_user_id": user["user_id"],
@@ -29,14 +28,21 @@ class TgrassService(BaseService):
             log.warning(f"tgrass get_tasks: {e}")
             return []
 
-        if data.get("status") == "no_offers" or not data.get("offers"):
+        if data.get("status") != "ok" or not data.get("offers"):
             return []
 
         return [
-            Task(task_id=str(t.get("offer_id")), url=t.get("link"), title=t.get("name") or "Канал", service=self.name)
+            Task(
+                task_id=str(t.get("offer_id")),
+                url=t.get("link"),
+                title=t.get("name") or "Канал",
+                service=self.name
+            )
             for t in data["offers"] if not t.get("subscribed")
         ]
 
     async def check(self, user: dict, task_id: str) -> bool:
+        # Согласно доке, проверка — это повторный запрос /offers.
+        # Если задания с таким task_id больше нет в списке (или статус ok) — значит подписался.
         tasks = await self.get_tasks(user)
         return not any(t.task_id == str(task_id) for t in tasks)

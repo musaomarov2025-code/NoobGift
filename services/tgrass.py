@@ -6,12 +6,14 @@ log = logging.getLogger("services.tgrass")
 
 class TgrassService(BaseService):
     name = "tgrass"
-    URL = "https://tgrass.space/offers"
+    URL = "https://tgrass.space/api/v1/offers" # Уточненный URL
     TIMEOUT = aiohttp.ClientTimeout(total=15)
 
     async def get_tasks(self, user: dict) -> list[Task]:
-        headers = {"Content-Type": "application/json", "Auth": self.api_key}
+        # Меняем Auth на Authorization: Bearer
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
         payload = {
+            "api_key": self.api_key, # Дублируем в тело на всякий случай
             "tg_user_id": user["user_id"],
             "is_premium": False,
             "lang": "ru",
@@ -32,12 +34,7 @@ class TgrassService(BaseService):
             return []
 
         return [
-            Task(
-                task_id=str(t.get("offer_id")), 
-                url=t.get("link"), 
-                title=t.get("name") or "Канал", 
-                service=self.name
-            )
+            Task(task_id=str(t.get("offer_id")), url=t.get("link"), title=t.get("name") or "Канал", service=self.name)
             for t in data["offers"] if not t.get("subscribed")
         ]
 

@@ -21,7 +21,8 @@ class TraffyService(BaseService):
         try:
             async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
                 async with s.post(self.URL, json=payload) as r:
-                    if r.status != 200:
+                    # ИСПРАВЛЕНИЕ: разрешаем статусы 200 и 201
+                    if r.status not in (200, 201):
                         log.error(f"Traffy API Error {r.status}: {await r.text()}")
                         return []
                     data = await r.json()
@@ -29,7 +30,6 @@ class TraffyService(BaseService):
             log.warning(f"traffy get_tasks: {e}")
             return []
 
-        # Вот здесь та самая правильная скобка и return
         return [
             Task(
                 task_id=str(t.get("assignment_id")),
@@ -46,6 +46,8 @@ class TraffyService(BaseService):
         try:
             async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
                 async with s.post(self.CHECK_URL, json=payload) as r:
+                    if r.status not in (200, 201):
+                        return False
                     data = await r.json()
         except Exception as e:
             log.warning(f"traffy check: {e}")

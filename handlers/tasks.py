@@ -77,12 +77,18 @@ async def cb_check_task(callback: CallbackQuery, bot: Bot):
     user = await db.get_user(callback.from_user.id)
     if not user: return
     task = await _get_next_task(user)
-    if not task: return await callback.answer("Задание не найдено", show_alert=True)
-    await callback.answer("⏳ Проверяем...")
+    if not task: return await callback.answer("Задание не найдено")
+    
+    await callback.answer("⏳")
     is_done = await check_task_in_services(user, task)
-    if not is_done: return await callback.answer(texts.TASK_NOT_SUBSCRIBED_TOAST, show_alert=True)
+    
+    if not is_done:
+        # Убрали show_alert, просто тихо игнорируем
+        return await callback.answer("❌", show_alert=False)
+
     reward = await db.get_setting("task_reward", 0.4)
     await db.add_hold(user["user_id"], reward, kind="task", task_id=task.key())
+    
     ref_id = user.get("referrer_id")
     if ref_id:
         ref_percent = await db.get_setting("ref_percent", 10)
@@ -92,8 +98,11 @@ async def cb_check_task(callback: CallbackQuery, bot: Bot):
             await db.add_ref_earned(ref_id, ref_amount)
             try: await bot.send_message(ref_id, texts.ref_earned_text(user.get("username"), user["user_id"], ref_amount))
             except: pass
+            
     await db.increment_tasks_done(user["user_id"])
     if user["user_id"] in user_active_tasks:
         user_active_tasks[user["user_id"]] = [t for t in user_active_tasks[user["user_id"]] if t.key() != task.key()]
-    await callback.answer(texts.task_done_toast(reward), show_alert=True)
+        
+    # Убрали show_alert, просто переключаем
+    await callback.answer("✅", show_alert=False)
     await show_tasks_menu(callback, user, bot)

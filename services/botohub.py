@@ -6,12 +6,12 @@ log = logging.getLogger("services.botohub")
 
 class BotohubService(BaseService):
     name = "botohub"
-    URL = "https://botohub.me/api/get-tasks"
+    URL = "https://botohub.me/get-tasks"
     TIMEOUT = aiohttp.ClientTimeout(total=15)
 
     async def get_tasks(self, user: dict) -> list[Task]:
         headers = {"Content-Type": "application/json", "Auth": self.api_key}
-        payload = {"chat_id": user["user_id"]}
+        payload = {"chat_id": user["user_id"], "is_task": True}
         try:
             async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
                 async with s.post(self.URL, json=payload) as r:
@@ -32,5 +32,13 @@ class BotohubService(BaseService):
         ]
 
     async def check(self, user: dict, task_id: str) -> bool:
-        tasks = await self.get_tasks(user)
-        return not any(t.task_id == task_id for t in tasks)
+        # В режиме is_task=true Botohub сам проверяет предыдущую задачу (prev_success)
+        headers = {"Content-Type": "application/json", "Auth": self.api_key}
+        payload = {"chat_id": user["user_id"], "is_task": True, "skip": False}
+        try:
+            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
+                async with s.post(self.URL, json=payload) as r:
+                    data = await r.json()
+        except Exception:
+            return False
+        return bool(data.get("prev_success"))

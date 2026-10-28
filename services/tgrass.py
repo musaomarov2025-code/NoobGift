@@ -6,14 +6,13 @@ log = logging.getLogger("services.tgrass")
 
 class TgrassService(BaseService):
     name = "tgrass"
-    URL = "https://tgrass.space/api/v1/offers" # Уточненный URL
+    URL = "https://tgrass.space/api/offers" # Точный URL из доков
     TIMEOUT = aiohttp.ClientTimeout(total=15)
 
     async def get_tasks(self, user: dict) -> list[Task]:
-        # Меняем Auth на Authorization: Bearer
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
+        # Из доков Tgrass: ключ передается в заголовке Auth
+        headers = {"Content-Type": "application/json", "Auth": self.api_key}
         payload = {
-            "api_key": self.api_key, # Дублируем в тело на всякий случай
             "tg_user_id": user["user_id"],
             "is_premium": False,
             "lang": "ru",

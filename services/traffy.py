@@ -21,7 +21,6 @@ class TraffyService(BaseService):
         try:
             async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
                 async with s.post(self.URL, json=payload) as r:
-                    # ИСПРАВЛЕНИЕ: разрешаем статусы 200 и 201
                     if r.status not in (200, 201):
                         log.error(f"Traffy API Error {r.status}: {await r.text()}")
                         return []
@@ -52,4 +51,6 @@ class TraffyService(BaseService):
         except Exception as e:
             log.warning(f"traffy check: {e}")
             return False
-        return bool(data.get("success") or data.get("completed"))
+        
+        # Traffy может вернуть completed или success
+        return bool(data.get("completed") or data.get("success"))

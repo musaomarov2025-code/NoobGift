@@ -26,6 +26,13 @@ def referral_kb(bot_username: str, user_id: int) -> InlineKeyboardMarkup:
         )],
     ])
 
+# Добавь это где-то рядом с main_menu_kb
+def profile_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💸 Вывести звезды", callback_data="go_withdraw")]
+    ])
+
+# Замени tasks_finished_kb полностью:
 def tasks_finished_kb(bot_username: str, user_id: int) -> InlineKeyboardMarkup:
     link = ref_link(bot_username, user_id)
     share_url = f"https://t.me/share/url?url={link}&text=Заходи в бота, тут раздают звёзды ⭐️"

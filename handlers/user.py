@@ -27,11 +27,15 @@ async def _bot_username(bot: Bot) -> str:
 def _greeting_kb(greet: dict):
     buttons = greet.get("buttons") or []
     rows = []
-    for b in buttons:
-        text_ = b.get("text", "").strip()
-        url_ = b.get("url", "").strip()
-        if text_ and url_:
-            rows.append([InlineKeyboardButton(text=text_, url=url_)])
+    for row_data in buttons:
+        if isinstance(row_data, dict):
+            row_data = [row_data]
+        row = []
+        for btn in row_data:
+            if btn.get("text") and btn.get("url"):
+                row.append(InlineKeyboardButton(text=btn["text"], url=btn["url"]))
+        if row:
+            rows.append(row)
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 async def _show_greeting(message: Message, bot: Bot):
@@ -90,13 +94,13 @@ async def _start_core(message: Message, bot: Bot, payload: str = ""):
     await message.answer(texts.STAR_MESSAGE)
     await asyncio.sleep(4)
     
-    # СРАЗУ ЗАДАНИЯ (передаем user (словарь), а не user_id)
-    user = await db.get_user(user_id) # Обновляем данные юзера
+    # СРАЗУ ЗАДАНИЯ
+    user = await db.get_user(user_id)
     try:
         await show_tasks_menu(message, user, bot)
     except Exception as e:
         log.error(f"Ошибка при загрузке заданий: {e}")
-        await message.answer("⚠️ Произошла ошибка при загрузке заданий. Попробуйте позже.", reply_markup=keyboards.main_menu_kb())
+        await message.answer("⚠️ Произошла ошибка при загрузке заданий.", reply_markup=keyboards.main_menu_kb())
 
 @router.message(CommandStart(deep_link=True))
 async def cmd_start_deep(message: Message, command: CommandObject, bot: Bot, state: FSMContext):
@@ -110,11 +114,9 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext):
 
 @router.callback_query(F.data == "back_menu")
 async def cb_back_menu(callback: CallbackQuery):
-    try:
-        await callback.message.edit_text(texts.MENU_TEXT, reply_markup=None)
-    except:
-        pass
-    await callback.message.answer("Выбери действие:", reply_markup=keyboards.main_menu_kb())
+    try: await callback.message.edit_text(texts.MENU_TEXT, reply_markup=None)
+    except: pass
+    await callback.message.answer(texts.MENU_TEXT, reply_markup=keyboards.main_menu_kb())
     await callback.answer()
 
 @router.message(F.text == "👤 Профиль")
@@ -132,11 +134,13 @@ async def show_referrals(message: Message, bot: Bot, state: FSMContext):
     ref_p = await db.get_setting("ref_percent", 10)
     await message.answer(texts.referrals_text(bu, user, ref_p), reply_markup=keyboards.referral_kb(bu, user["user_id"]))
 
+# НОВОЕ КОПИРОВАНИЕ
 @router.callback_query(F.data == "copy_ref")
 async def cb_copy_ref(callback: CallbackQuery, bot: Bot):
     bu = await _bot_username(bot)
     link = f"https://t.me/{bu}?start={callback.from_user.id}"
-    await callback.answer(f"✅ Ссылка скопирована!\n\n{link}", show_alert=True)
+    await callback.message.answer(f"👇 <b>Твоя ссылка (нажми на неё, чтобы скопировать):</b>\n<code>{link}</code>")
+    await callback.answer("✅ Ссылка скопирована!", show_alert=True)
 
 @router.message(F.text == "📊 Статистика")
 async def show_stats(message: Message, state: FSMContext):
@@ -170,14 +174,16 @@ async def cb_withdraw(callback: CallbackQuery, bot: Bot):
 
     await callback.answer()
     wid = result["id"]
-    await message.answer(texts.withdrawal_created_text(wid, amount))
+    await callback.message.answer(texts.withdrawal_created_text(wid, amount))
 
     channel = await db.get_setting("withdraw_channel") or ""
     if channel:
         try:
             msg = await bot.send_message(channel, texts.withdrawal_channel_new_text(wid, callback.from_user.username, callback.from_user.id, amount))
             await db.set_withdrawal_msg(wid, msg.message_id)
-        except Exception as e: log.warning(f"channel send err: {e}")
+        except Exception as e: 
+            log.warning(f"channel send err: {e}")
+            await callback.message.answer(f"⚠️ Внимание! Не удалось отправить заявку в канал. Проверьте, что бот добавлен в админы канала, и его ID указан верно. Ошибка: {e}")
 
 @router.message(F.text.startswith("/stat_"))
 async def cmd_ad_stats(message: Message):

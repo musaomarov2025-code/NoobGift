@@ -128,7 +128,16 @@ async def cb_back_menu(callback: CallbackQuery):
 async def show_profile(message: Message, state: FSMContext):
     await state.clear()
     user = await db.get_user(message.from_user.id)
-    if user: await message.answer(texts.profile_text(user))
+    if user: 
+        await message.answer(texts.profile_text(user), reply_markup=keyboards.profile_kb())
+
+# Новый обработчик кнопки из профиля
+@router.callback_query(F.data == "go_withdraw")
+async def cb_go_withdraw(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    if user: 
+        await callback.message.edit_text(texts.withdraw_text(user), reply_markup=keyboards.withdraw_kb())
+    await callback.answer()
 
 @router.message(F.text == "👥 Рефералы")
 async def show_referrals(message: Message, bot: Bot, state: FSMContext):

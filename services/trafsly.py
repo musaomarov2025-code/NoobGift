@@ -6,7 +6,7 @@ log = logging.getLogger("services.trafsly")
 
 class TrafslyService(BaseService):
     name = "trafsly"
-    BASE = "https://api.trafsly.com"
+    BASE = "https://trafsly.com/api" # Убрали api. и добавили /api
     TIMEOUT = aiohttp.ClientTimeout(total=15)
 
     async def get_tasks(self, user: dict) -> list[Task]:
@@ -24,12 +24,7 @@ class TrafslyService(BaseService):
             return []
 
         return [
-            Task(
-                task_id=str(t.get("id")), 
-                url=t.get("link"), 
-                title=t.get("title") or "Канал", 
-                service=self.name
-            )
+            Task(task_id=str(t.get("id")), url=t.get("link"), title=t.get("title") or "Канал", service=self.name)
             for t in data.get("sponsors", []) if not t.get("subscribed")
         ]
 

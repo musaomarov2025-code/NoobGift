@@ -210,15 +210,27 @@ async def adm_greet_button_save(message: Message, state: FSMContext):
     if message.text == "/cancel":
         await state.clear()
         return await message.answer("Отменено.", reply_markup=keyboards.admin_menu_kb())
-    if " - " not in message.text: return await message.answer("❌ Формат: Текст - ссылка")
-    parts = message.text.split(" - ", 1)
+    
+    rows_to_add = []
+    # Разделяем по && (это значит новая строка)
+    for row_str in message.text.split("&&"):
+        row = []
+        if " - " in row_str:
+            t, u = row_str.split(" - ", 1)
+            row.append({"text": t.strip(), "url": u.strip()})
+        if row:
+            rows_to_add.append(row)
+            
+    if not rows_to_add:
+        return await message.answer("❌ Формат: Текст - ссылка && Текст - ссылка")
+        
     greet = await db.get_greeting()
     buttons = greet.get("buttons", [])
-    buttons.append({"text": parts[0].strip(), "url": parts[1].strip()})
+    buttons.extend(rows_to_add)
     await db.set_greeting(buttons=buttons)
+    
     await state.clear()
-    await message.answer("✅ Кнопка добавлена!", reply_markup=keyboards.admin_menu_kb())
-
+    await message.answer("✅ Кнопки добавлены! (Если указали &&, они будут в один ряд)", reply_markup=keyboards.admin_menu_kb())
 @router.callback_query(F.data == "adm_greet_clear")
 async def adm_greet_clear(callback: CallbackQuery):
     await db.set_greeting(buttons=[])

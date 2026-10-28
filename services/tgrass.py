@@ -1,54 +1,39 @@
 import logging
 import aiohttp
-
 from .base import BaseService, Task
 
 log = logging.getLogger("services.tgrass")
 
-
 class TgrassService(BaseService):
     name = "tgrass"
-    BASE = "https://tgrass.space/api"
+    URL = "https://tgrass.space/offers"
     TIMEOUT = aiohttp.ClientTimeout(total=15)
-    HEADERS = {"User-Agent": "StarsBot/1.0", "Accept": "application/json"}
 
-    async def get_tasks(self, user_id: int) -> list[Task]:
+    async def get_tasks(self, user: dict) -> list[Task]:
+        headers = {"Content-Type": "application/json", "Auth": self.api_key}
+        payload = {
+            "tg_user_id": user["user_id"],
+            "is_premium": False, # При необходимости можно определять через Telegram API
+            "lang": "ru",
+            "tg_login": user.get("username"),
+        }
         try:
-            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=self.HEADERS) as s:
-                async with s.post(f"{self.BASE}/offers", json={
-                    "api_key": self.api_key,
-                    "user_id": user_id,
-                }) as r:
-                    if r.status != 200:
-                        return []
+            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
+                async with s.post(self.URL, json=payload) as r:
+                    if r.status != 200: return []
                     data = await r.json()
         except Exception as e:
-            log.warning(f"get_tasks error: {e}")
+            log.warning(f"tgrass get_tasks: {e}")
             return []
 
-        if data.get("status") != "ok":
+        if data.get("status") == "no_offers" or not data.get("offers"):
             return []
 
         return [
-            Task(
-                task_id=str(t.get("id")),
-                url=t.get("link", ""),
-                title=t.get("title", "Канал"),
-                service=self.name,
-            )
-            for t in data.get("offers", [])
+            Task(task_id=str(t.get("offer_id")), url=t.get("link"), title=t.get("name") or "Канал", service=self.name)
+            for t in data["offers"] if not t.get("subscribed")
         ]
 
-    async def check(self, user_id: int, task_id: str) -> bool:
-        try:
-            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=self.HEADERS) as s:
-                async with s.post(f"{self.BASE}/check", json={
-                    "api_key": self.api_key,
-                    "user_id": user_id,
-                    "offer_id": task_id,
-                }) as r:
-                    data = await r.json()
-        except Exception as e:
-            log.warning(f"check error: {e}")
-            return False
-        return data.get("status") == "ok"
+    async def check(self, user: dict, task_id: str) -> bool:
+        tasks = await self.get_tasks(user)
+        return any(t.task_id == str(task_id) for t in tasks)

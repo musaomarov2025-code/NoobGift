@@ -26,7 +26,9 @@ async def cmd_admin(message: Message, state: FSMContext):
 @router.message(Command("test_api"))
 async def cmd_test_api(message: Message):
     await message.answer("⏳ Тестирую API (жду ответы)...")
-    from services.manager import _get_active_services # Импорт внутри функции
+    from services.manager import _get_active_services 
+    import asyncio
+    
     services = await _get_active_services()
     if not services:
         return await message.answer("❌ Нет активных сервисов.")
@@ -35,29 +37,21 @@ async def cmd_test_api(message: Message):
     if not user: return await message.answer("❌ Юзер не найден.")
     
     res_text = "<b>Результаты API:</b>\n\n"
-    for s in services:
+    
+    async def test_service(s):
         try:
-            tasks = await s.get_tasks(user)
-            res_text += f"<b>{s.name}</b>: получено {len(tasks)} заданий.\n"
+            tasks = await asyncio.wait_for(s.get_tasks(user), timeout=5.0)
+            return f"<b>{s.name}</b>: получено {len(tasks)} заданий.\n"
+        except asyncio.TimeoutError:
+            return f"<b>{s.name}</b>: ❌ ТАЙМАУТ (сервер не ответил за 5 сек).\n"
         except Exception as e:
-            res_text += f"<b>{s.name}</b>: ОШИБКА - {e}\n"
+            return f"<b>{s.name}</b>: ❌ ОШИБКА - {str(e)[:100]}\n"
+
+    results = await asyncio.gather(*(test_service(s) for s in services))
     
-    await message.answer(res_text)
-    
-    # ПОЛУЧАЕМ СЛОВАРЬ ЮЗЕРА ИЗ БАЗЫ (а не просто число)
-    user = await db.get_user(message.from_user.id)
-    if not user:
-        return await message.answer("❌ Юзер не найден в базе. Напиши /start")
-    
-    res_text = "<b>Результаты API:</b>\n\n"
-    for s in services:
-        try:
-            # Передаем в сервис объект user (словарь)
-            tasks = await s.get_tasks(user)
-            res_text += f"<b>{s.name}</b>: получено {len(tasks)} заданий.\n"
-        except Exception as e:
-            res_text += f"<b>{s.name}</b>: ОШИБКА - {e}\n"
-    
+    for r in results:
+        res_text += r
+        
     await message.answer(res_text)
     
 @router.callback_query(F.data == "adm_back")

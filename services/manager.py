@@ -25,11 +25,19 @@ async def _get_active_services() -> list[BaseService]:
 async def get_all_tasks(user: dict) -> list[Task]:
     services = await _get_active_services()
     if not services: return []
-    results = await asyncio.gather(*(s.get_tasks(user) for s in services), return_exceptions=True)
+    
     tasks = []
-    for s, res in zip(services, results):
-        if isinstance(res, list): tasks.extend(res)
-        else: log.warning(f"{s.name} get_tasks failed: {res}")
+    for s in services:
+        try:
+            # ЖЕСТКИЙ ТАЙМАУТ 5 СЕКУНД НА КАЖДЫЙ СЕРВИС
+            res = await asyncio.wait_for(s.get_tasks(user), timeout=5.0)
+            if isinstance(res, list): 
+                tasks.extend(res)
+        except asyncio.TimeoutError:
+            log.warning(f"{s.name} get_tasks TIMEOUT (не ответил за 5 сек)")
+        except Exception as e:
+            log.warning(f"{s.name} get_tasks failed: {e}")
+            
     seen, unique = set(), []
     for t in tasks:
         if t.key() not in seen:
@@ -41,5 +49,13 @@ async def check_task_in_services(user: dict, task: Task) -> bool:
     services = await _get_active_services()
     for s in services:
         if s.name == task.service:
-            return await s.check(user, task.task_id)
+            try:
+                # Таймаут на проверку тоже 5 секунд
+                return await asyncio.wait_for(s.check(user, task.task_id), timeout=5.0)
+            except asyncio.TimeoutError:
+                log.warning(f"{s.name} check TIMEOUT")
+                return False
+            except Exception as e:
+                log.warning(f"{s.name} check failed: {e}")
+                return False
     return False

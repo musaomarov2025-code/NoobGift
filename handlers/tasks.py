@@ -92,6 +92,7 @@ async def cb_check_task(callback: CallbackQuery, bot: Bot):
     is_done = await check_task_in_services(user, task)
     
     if not is_done:
+        # Четко сообщаем, что не подписан
         return await callback.answer("❌ Вы не подписались.\nПодпишитесь на канал и нажмите кнопку снова.", show_alert=True)
 
     # === ЗАДАНИЕ ВЫПОЛНЕНО ===
@@ -112,7 +113,7 @@ async def cb_check_task(callback: CallbackQuery, bot: Bot):
     if user["user_id"] in user_active_tasks:
         user_active_tasks[user["user_id"]] = [t for t in user_active_tasks[user["user_id"]] if t.key() != task.key()]
 
-    # Обновляем данные для показа актуального холда
+    # Получаем актуальный баланс для отображения
     user = await db.get_user(user["user_id"])
     
     await callback.answer(f"✅ Задание выполнено!\n+{reward:.2f} ⭐️ в холд.\nНа холде: {user['hold']:.2f} ⭐️", show_alert=True)

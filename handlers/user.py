@@ -73,7 +73,6 @@ async def _start_core(message: Message, bot: Bot, payload: str = ""):
     if ad_code and is_new:
         await db.incr_ad_stat(ad_code, "clicks")
 
-    # ПРОМОКОД (работает всегда, а не только при первом заходе)
     if promo_code:
         result = await db.use_promocode(promo_code, user_id)
         if "error" not in result:
@@ -91,8 +90,13 @@ async def _start_core(message: Message, bot: Bot, payload: str = ""):
     await message.answer(texts.STAR_MESSAGE)
     await asyncio.sleep(4)
     
-    # СРАЗУ ЗАДАНИЯ (а не меню)
-    await show_tasks_menu(message, user_id, bot)
+    # СРАЗУ ЗАДАНИЯ (передаем user (словарь), а не user_id)
+    user = await db.get_user(user_id) # Обновляем данные юзера
+    try:
+        await show_tasks_menu(message, user, bot)
+    except Exception as e:
+        log.error(f"Ошибка при загрузке заданий: {e}")
+        await message.answer("⚠️ Произошла ошибка при загрузке заданий. Попробуйте позже.", reply_markup=keyboards.main_menu_kb())
 
 @router.message(CommandStart(deep_link=True))
 async def cmd_start_deep(message: Message, command: CommandObject, bot: Bot, state: FSMContext):
@@ -106,11 +110,12 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext):
 
 @router.callback_query(F.data == "back_menu")
 async def cb_back_menu(callback: CallbackQuery):
-    await callback.message.edit_text(texts.MENU_TEXT, reply_markup=None)
+    try:
+        await callback.message.edit_text(texts.MENU_TEXT, reply_markup=None)
+    except:
+        pass
     await callback.message.answer("Выбери действие:", reply_markup=keyboards.main_menu_kb())
     await callback.answer()
-
-# --- ПРОФИЛЬ, РЕФЕРАЛЫ, СТАТИСТИКА ---
 
 @router.message(F.text == "👤 Профиль")
 async def show_profile(message: Message, state: FSMContext):
@@ -135,12 +140,10 @@ async def cb_copy_ref(callback: CallbackQuery, bot: Bot):
 
 @router.message(F.text == "📊 Статистика")
 async def show_stats(message: Message, state: FSMContext):
-    await state.clear() # Чтобы админка не перехватывала текст
+    await state.clear()
     stats = await db.get_stats()
     top = await db.get_top_users(5)
     await message.answer(texts.stats_text(stats, top), reply_markup=keyboards.stats_kb())
-
-# --- ВЫВОД ---
 
 @router.message(F.text == "💸 Вывод")
 async def show_withdraw(message: Message, state: FSMContext):
@@ -167,7 +170,7 @@ async def cb_withdraw(callback: CallbackQuery, bot: Bot):
 
     await callback.answer()
     wid = result["id"]
-    await callback.message.answer(texts.withdrawal_created_text(wid, amount))
+    await message.answer(texts.withdrawal_created_text(wid, amount))
 
     channel = await db.get_setting("withdraw_channel") or ""
     if channel:
@@ -175,8 +178,6 @@ async def cb_withdraw(callback: CallbackQuery, bot: Bot):
             msg = await bot.send_message(channel, texts.withdrawal_channel_new_text(wid, callback.from_user.username, callback.from_user.id, amount))
             await db.set_withdrawal_msg(wid, msg.message_id)
         except Exception as e: log.warning(f"channel send err: {e}")
-
-# --- РЕКЛАМА ---
 
 @router.message(F.text.startswith("/stat_"))
 async def cmd_ad_stats(message: Message):

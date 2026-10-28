@@ -114,8 +114,13 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext):
 
 @router.callback_query(F.data == "back_menu")
 async def cb_back_menu(callback: CallbackQuery):
-    try: await callback.message.edit_text(texts.MENU_TEXT, reply_markup=None)
-    except: pass
+    # Удаляем сообщение, откуда нажали "Назад" (например, "Задания закончились")
+    try: 
+        await callback.message.delete()
+    except: 
+        pass
+    
+    # Отправляем новое сообщение с главным меню
     await callback.message.answer(texts.MENU_TEXT, reply_markup=keyboards.main_menu_kb())
     await callback.answer()
 
@@ -134,15 +139,20 @@ async def show_referrals(message: Message, bot: Bot, state: FSMContext):
     ref_p = await db.get_setting("ref_percent", 10)
     await message.answer(texts.referrals_text(bu, user, ref_p), reply_markup=keyboards.referral_kb(bu, user["user_id"]))
 
-# НОВОЕ КОПИРОВАНИЕ
 @router.callback_query(F.data == "copy_ref")
 async def cb_copy_ref(callback: CallbackQuery, bot: Bot):
     bu = await _bot_username(bot)
     link = f"https://t.me/{bu}?start={callback.from_user.id}"
-    await callback.message.answer(f"👇 <b>Твоя ссылка (нажми на неё, чтобы скопировать):</b>\n<code>{link}</code>")
+    
+    # Отправляем ссылку в рамке (при нажатии на нее в Telegram она копируется)
+    await callback.message.answer(
+        f"👇 <b>Нажми на ссылку ниже, чтобы скопировать:</b>\n\n"
+        f"<code>{link}</code>"
+    )
+    # Показываем всплывающее окно
     await callback.answer("✅ Ссылка скопирована!", show_alert=True)
-
 @router.message(F.text == "📊 Статистика")
+
 async def show_stats(message: Message, state: FSMContext):
     await state.clear()
     stats = await db.get_stats()

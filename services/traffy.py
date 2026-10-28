@@ -22,14 +22,12 @@ class TraffyService(BaseService):
             async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
                 async with s.post(self.URL, json=payload) as r:
                     if r.status != 200: 
-    log.error(f"Traffy API Error {r.status}: {await r.text()}")
-    return []
+                        log.error(f"Traffy API Error {r.status}: {await r.text()}")
+                        return []
                     data = await r.json()
         except Exception as e:
             log.warning(f"traffy get_tasks: {e}")
             return []
-
-        return [
             Task(task_id=str(t.get("assignment_id")), url=t.get("target_link"), title=t.get("title") or "Канал", service=self.name)
             for t in data.get("tasks", [])
         ]

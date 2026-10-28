@@ -120,14 +120,6 @@ async def adm_wd_nav(callback: CallbackQuery):
     await _show_withdraw_card(callback.message, pending, index)
     await callback.answer()
 
-@router.callback_query(F.data.startswith("adm_wd_skip_"))
-async def adm_wd_skip(callback: CallbackQuery):
-    index = int(callback.data.split("_")[-1]) + 1
-    pending = await db.list_withdrawals("pending")
-    if not pending: return await callback.answer("Пусто", show_alert=True)
-    await _show_withdraw_card(callback.message, pending, index % len(pending))
-    await callback.answer()
-
 @router.callback_query(F.data.startswith("adm_wd_accept_"))
 async def adm_wd_accept(callback: CallbackQuery, bot: Bot):
     wid = int(callback.data.split("_")[-1])
@@ -142,16 +134,18 @@ async def adm_wd_accept(callback: CallbackQuery, bot: Bot):
         try: 
             await bot.send_message(channel, texts.withdrawal_channel_paid_text(wid, w["username"], w["user_id"], w["amount"]))
         except Exception as e: 
-            # Если бот не смог написать в канал, он сообщит об этом тебе в ЛС
             await callback.message.answer(f"⚠️ Ошибка при отправке в канал (проверь права бота): {e}")
             
-    try: 
-        await bot.send_message(w["user_id"], f"✅ Заявка #{wid} выплачена!")
-    except: 
-        pass
-        
-    await callback.message.edit_text(f"✅ Заявка #{wid} принята.", reply_markup=keyboards.admin_back_kb())
-    await callback.answer()
+    try: await bot.send_message(w["user_id"], f"✅ Заявка #{wid} выплачена!")
+    except: pass
+    
+    # Показываем следующую заявку
+    pending = await db.list_withdrawals("pending")
+    if pending:
+        await _show_withdraw_card(callback.message, pending, 0)
+    else:
+        await callback.message.edit_text("📋 Все заявки обработаны.", reply_markup=keyboards.admin_back_kb())
+    await callback.answer("✅ Принята")
 
 
 @router.callback_query(F.data.startswith("adm_wd_reject_"))
@@ -168,15 +162,27 @@ async def adm_wd_reject(callback: CallbackQuery, bot: Bot):
         try: 
             await bot.send_message(channel, texts.withdrawal_channel_reject_text(wid, w["username"], w["user_id"], w["amount"]))
         except Exception as e: 
-            # Сообщаем тебе, если канал не отвечает
-            await callback.message.answer(f"⚠️ Ошибка при отправке в канал (проверь права бота): {e}")
+            await callback.message.answer(f"⚠️ Ошибка при отправке в канал: {e}")
             
-    try: 
-        await bot.send_message(w["user_id"], texts.withdrawal_rejected_user_text(wid, w["amount"]))
-    except: 
-        pass
-        
-    await callback.message.edit_text(f"❌ Заявка #{wid} отклонена.", reply_markup=keyboards.admin_back_kb())
+    try: await bot.send_message(w["user_id"], texts.withdrawal_rejected_user_text(wid, w["amount"]))
+    except: pass
+    
+    # Показываем следующую заявку
+    pending = await db.list_withdrawals("pending")
+    if pending:
+        await _show_withdraw_card(callback.message, pending, 0)
+    else:
+        await callback.message.edit_text("📋 Все заявки обработаны.", reply_markup=keyboards.admin_back_kb())
+    await callback.answer("❌ Отклонена")
+
+# В adm_wd_skip тоже лучше сделать так:
+@router.callback_query(F.data.startswith("adm_wd_skip_"))
+async def adm_wd_skip(callback: CallbackQuery):
+    index = int(callback.data.split("_")[-1]) + 1
+    pending = await db.list_withdrawals("pending")
+    if not pending: 
+        return await callback.answer("Пусто", show_alert=True)
+    await _show_withdraw_card(callback.message, pending, index % len(pending))
     await callback.answer()
 
 # ============= 3. ПРИВЕТКА =============

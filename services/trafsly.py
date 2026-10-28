@@ -1,51 +1,39 @@
 import logging
 import aiohttp
-
 from .base import BaseService, Task
 
 log = logging.getLogger("services.trafsly")
 
-
 class TrafslyService(BaseService):
     name = "trafsly"
-    BASE = "https://trafsly.com/api"
+    BASE = "https://api.trafsly.com"
     TIMEOUT = aiohttp.ClientTimeout(total=15)
-    HEADERS = {"User-Agent": "StarsBot/1.0", "Accept": "application/json"}
 
-    async def get_tasks(self, user_id: int) -> list[Task]:
+    async def get_tasks(self, user: dict) -> list[Task]:
+        headers = {"Content-Type": "application/json", "Auth": self.api_key}
+        payload = {"user_id": user["user_id"]}
         try:
-            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=self.HEADERS) as s:
-                async with s.post(f"{self.BASE}/get-sponsors", json={
-                    "token": self.api_key,
-                    "user_id": user_id,
-                }) as r:
-                    if r.status != 200:
-                        return []
+            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
+                async with s.post(f"{self.BASE}/get-sponsors", json=payload) as r:
+                    if r.status != 200: return []
                     data = await r.json()
         except Exception as e:
-            log.warning(f"get_tasks error: {e}")
+            log.warning(f"trafsly get_tasks: {e}")
             return []
 
         return [
-            Task(
-                task_id=str(t.get("id")),
-                url=t.get("link", ""),
-                title=t.get("title", "Канал"),
-                service=self.name,
-            )
-            for t in data.get("sponsors", [])
+            Task(task_id=str(t.get("id")), url=t.get("link"), title=t.get("title") or "Канал", service=self.name)
+            for t in data.get("sponsors", []) if not t.get("subscribed")
         ]
 
-    async def check(self, user_id: int, task_id: str) -> bool:
+    async def check(self, user: dict, task_id: str) -> bool:
+        headers = {"Content-Type": "application/json", "Auth": self.api_key}
+        payload = {"user_id": user["user_id"], "sponsor_id": task_id}
         try:
-            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=self.HEADERS) as s:
-                async with s.post(f"{self.BASE}/confirm-subscription", json={
-                    "token": self.api_key,
-                    "user_id": user_id,
-                    "sponsor_id": task_id,
-                }) as r:
+            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
+                async with s.post(f"{self.BASE}/confirm-subscription", json=payload) as r:
                     data = await r.json()
         except Exception as e:
-            log.warning(f"check error: {e}")
+            log.warning(f"trafsly check: {e}")
             return False
         return bool(data.get("success") or data.get("subscribed"))

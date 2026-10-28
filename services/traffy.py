@@ -21,7 +21,9 @@ class TraffyService(BaseService):
         try:
             async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
                 async with s.post(self.URL, json=payload) as r:
-                    if r.status != 200: return []
+                    if r.status != 200: 
+    log.error(f"Traffy API Error {r.status}: {await r.text()}")
+    return []
                     data = await r.json()
         except Exception as e:
             log.warning(f"traffy get_tasks: {e}")

@@ -1,57 +1,68 @@
-import logging
 import aiohttp
-from .base import BaseService, Task
+from config import TGRASS_URL
+from database import get_setting
 
-log = logging.getLogger("services.tgrass")
 
-class TgrassService(BaseService):
-    name = "tgrass"
-    # ТОЧНЫЙ URL ИЗ ДОКУМЕНТАЦИИ
-    URL = "https://tgrass.space/offers"
-    TIMEOUT = aiohttp.ClientTimeout(total=10)
+def tgrass_enabled():
+    return get_setting("tgrass_enabled") == "1"
 
-    async def get_tasks(self, user: dict) -> list[Task]:
-        # Ключ передается в заголовке Auth (без Bearer)
-        headers = {
-            "Content-Type": "application/json", 
-            "Auth": self.api_key
-        }
-        # Обязательные поля по документации
-        payload = {
-            "tg_user_id": user["user_id"],
-            "is_premium": False,
-            "lang": "ru",
-            "tg_login": user.get("username") or "",
-        }
-        
-        try:
-            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
-                async with s.post(self.URL, json=payload) as r:
-                    if r.status not in (200, 201):
-                        log.error(f"Tgrass API Error {r.status}: {await r.text()}")
-                        return []
-                    data = await r.json()
-        except Exception as e:
-            log.warning(f"tgrass get_tasks: {e}")
-            return []
 
-        # Если статус не ok или офферов нет — возвращаем пустой список
-        if data.get("status") != "ok" or not data.get("offers"):
-            return []
+def tgrass_key():
+    return get_setting("tgrass_api_key") or ""
 
-        # Собираем только те офферы, на которые юзер еще не подписан
-        return [
-            Task(
-                task_id=str(t.get("offer_id")),
-                url=t.get("link"),
-                title=t.get("name") or "Канал",
-                service=self.name
-            )
-            for t in data["offers"] if not t.get("subscribed")
-        ]
 
-    async def check(self, user: dict, task_id: str) -> bool:
-        # По документации проверка — это повторный запрос к /offers.
-        # Если оффер с таким ID исчез из списка (или status стал ok) — значит, подписался.
-        tasks = await self.get_tasks(user)
-        return not any(t.task_id == str(task_id) for t in tasks)
+def _base_payload(user_id, username=None, lang=None, is_premium=False, limit=None):
+    payload = {
+        "tg_user_id": int(user_id),
+        "is_premium": bool(is_premium),
+        "lang": lang or "ru",
+    }
+    if username:
+        payload["tg_login"] = username
+    if limit:
+        payload["offers_limit"] = int(limit)
+    return payload
+
+
+async def _tgrass_request(path, payload):
+    key = tgrass_key()
+    if not key:
+        return {"status": "error", "message": "no key", "offers": []}
+    headers = {
+        "Content-Type": "application/json",
+        "Auth": key,
+    }
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                f"{TGRASS_URL}{path}",
+                json=payload,
+                headers=headers,
+                ssl=False,  # у tgrass самоподписанный сертификат (см. их пример с verify=False)
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as r:
+                data = await r.json(content_type=None)
+                print(f"TGRASS {path}:", data)
+                return data
+    except Exception as e:
+        print("Tgrass error:", e)
+        return {"status": "error", "message": str(e), "offers": []}
+
+
+async def get_offers(user_id, username=None, lang=None, is_premium=False, limit=6):
+    return await _tgrass_request(
+        "/offers",
+        _base_payload(user_id, username, lang, is_premium, limit))
+
+
+async def get_tasks(user_id, username=None, lang=None, is_premium=False, limit=10):
+    return await _tgrass_request(
+        "/tasks",
+        _base_payload(user_id, username, lang, is_premium, limit))
+
+
+async def check_offer(user_id, offer_id):
+    return await _tgrass_request("/check", {
+        "tg_user_id": int(user_id),
+        "offer_id": int(offer_id),
+    })

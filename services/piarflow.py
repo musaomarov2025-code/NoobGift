@@ -1,34 +1,50 @@
-import logging
 import aiohttp
-from .base import BaseService, Task
+from config import PIARFLOW_URL
+from database import get_setting
 
-log = logging.getLogger("services.piarflow")
 
-class PiarFlowService(BaseService):
-    name = "piarflow"
-    BASE = "https://piarflow.com/v1"
-    TIMEOUT = aiohttp.ClientTimeout(total=15)
+def piarflow_enabled():
+    return get_setting("piarflow_enabled") == "1"
 
-    async def get_tasks(self, user: dict) -> list[Task]:
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
-        payload = {"user_id": user["user_id"], "chat_id": user["user_id"], "max_sponsors": 5, "first_name": user.get("first_name") or "", "username": user.get("username") or "", "language_code": "ru"}
-        
-        async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
-            async with s.post(f"{self.BASE}/sponsors", json=payload) as r:
-                if r.status not in (200, 201):
-                    raise Exception(f"HTTP {r.status}: {await r.text()}") # ВЫКИДЫВАЕМ ОШИБКУ
-                data = await r.json()
 
-        return [Task(task_id=t.get("link"), url=t.get("link"), title="Канал", service=self.name) for t in data.get("sponsors", []) if t.get("status") == "unsubscribed"]
+def piarflow_key():
+    return get_setting("piarflow_key") or ""
 
-    async def check(self, user: dict, task_id: str) -> bool:
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
-        payload = {"user_id": user["user_id"], "links": [task_id]}
-        async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
-            async with s.post(f"{self.BASE}/sponsors/check", json=payload) as r:
-                if r.status not in (200, 201): return False
-                data = await r.json()
-        for sp in data.get("sponsors", []):
-            if sp.get("link") == task_id and sp.get("status") == "subscribed":
-                return True
-        return False
+
+async def _piarflow_request(path, payload):
+    key = piarflow_key()
+    if not key:
+        return {"status": "error", "message": "no key"}
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                f"{PIARFLOW_URL}{path}",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as r:
+                data = await r.json(content_type=None)
+                print(f"PIARFLOW {path}:", data)
+                return data
+    except Exception as e:
+        print("PiarFlow error:", e)
+        return {"status": "error", "message": str(e)}
+
+
+async def get_sponsors(user_id, chat_id, max_sponsors=1):
+    return await _piarflow_request("/sponsors", {
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "max_sponsors": max_sponsors,
+    })
+
+
+async def check(user_id, links):
+    return await _piarflow_request("/sponsors/check", {
+        "user_id": user_id,
+        "links": links,
+    })

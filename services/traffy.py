@@ -1,56 +1,63 @@
-import logging
 import aiohttp
-from .base import BaseService, Task
+from config import TRAFFY_URL
+from database import get_setting
 
-log = logging.getLogger("services.traffy")
 
-class TraffyService(BaseService):
-    name = "traffy"
-    URL = "https://api.traffy.ai/publisher/tasks"
-    CHECK_URL = "https://api.traffy.ai/publisher/tasks/check"
-    TIMEOUT = aiohttp.ClientTimeout(total=15)
+def traffy_enabled():
+    return get_setting("traffy_enabled") == "1"
 
-    async def get_tasks(self, user: dict) -> list[Task]:
-        headers = {"Content-Type": "application/json", "x-publisher-api-key": self.api_key}
-        payload = {
-            "telegram_id": user["user_id"],
-            "first_name": user.get("first_name") or "",
-            "username": user.get("username") or "",
-            "language_code": "ru",
-        }
-        try:
-            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
-                async with s.post(self.URL, json=payload) as r:
-                    if r.status not in (200, 201):
-                        log.error(f"Traffy API Error {r.status}: {await r.text()}")
-                        return []
-                    data = await r.json()
-        except Exception as e:
-            log.warning(f"traffy get_tasks: {e}")
-            return []
 
-        return [
-            Task(
-                task_id=str(t.get("assignment_id")),
-                url=t.get("target_link"),
-                title=t.get("title") or "Канал",
-                service=self.name
-            )
-            for t in data.get("tasks", [])
-        ]
+def traffy_key():
+    return get_setting("traffy_api_key") or ""
 
-    async def check(self, user: dict, task_id: str) -> bool:
-        headers = {"Content-Type": "application/json", "x-publisher-api-key": self.api_key}
-        payload = {"telegram_id": user["user_id"], "assignment_id": task_id}
-        try:
-            async with aiohttp.ClientSession(timeout=self.TIMEOUT, headers=headers) as s:
-                async with s.post(self.CHECK_URL, json=payload) as r:
-                    if r.status not in (200, 201):
-                        return False
-                    data = await r.json()
-        except Exception as e:
-            log.warning(f"traffy check: {e}")
-            return False
-        
-        # Traffy может вернуть completed или success
-        return bool(data.get("completed") or data.get("success"))
+
+def _headers():
+    key = traffy_key()
+    return {
+        "Content-Type": "application/json",
+        "x-publisher-api-key": key,
+    }
+
+
+async def _traffy_request(method, path, payload=None, params=None):
+    if not traffy_key():
+        return {"ok": False, "error": "no key"}
+    url = f"{TRAFFY_URL}{path}"
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.request(
+                method, url,
+                json=payload if payload is not None else None,
+                params=params,
+                headers=_headers(),
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as r:
+                data = await r.json(content_type=None)
+                print(f"TRAFFY {path}:", data)
+                return data
+    except Exception as e:
+        print("Traffy error:", e)
+        return {"ok": False, "error": str(e)}
+
+
+async def get_tasks(user_id, limit=6, username=None, first_name=None,
+                    lang=None):
+    payload = {"telegram_id": int(user_id), "limit": int(limit)}
+    if username:
+        payload["username"] = username
+    if first_name:
+        payload["first_name"] = first_name
+    if lang:
+        payload["language_code"] = lang
+    return await _traffy_request("POST", "/tasks", payload)
+
+
+async def check_tasks(user_id, assignment_ids):
+    return await _traffy_request("POST", "/tasks/check", {
+        "telegram_id": int(user_id),
+        "assignment_ids": list(assignment_ids),
+    })
+
+
+async def me():
+    return await _traffy_request("GET", "/me")

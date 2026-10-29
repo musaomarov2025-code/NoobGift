@@ -1,386 +1,965 @@
-import json
-import os
-import asyncio
-from datetime import datetime, timezone, timedelta
-from typing import Optional, Any
+import sqlite3
+import random
+from datetime import datetime, timedelta, date
+from config import DB, DEFAULTS, REFERRAL_DAYS
 
-import config
 
-_lock = asyncio.Lock()
+def init_db():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, balance INTEGER DEFAULT 0, last_bonus TEXT, referrer_id INTEGER, registered_at TEXT)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS referrals (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, referrer_id INTEGER, created_at TEXT, reminded INTEGER DEFAULT 0, status TEXT DEFAULT 'pending')""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS withdrawals (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount INTEGER, gift TEXT, status TEXT DEFAULT 'pending', created_at TEXT)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS promos (code TEXT PRIMARY KEY, amount INTEGER, max_uses INTEGER, used INTEGER DEFAULT 0, active INTEGER DEFAULT 1)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS promo_uses (code TEXT, user_id INTEGER, used_at TEXT, PRIMARY KEY (code, user_id))""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS custom_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, link TEXT, reward INTEGER DEFAULT 10, active INTEGER DEFAULT 1)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS custom_tasks_done (user_id INTEGER, task_id INTEGER, done_at TEXT, PRIMARY KEY (user_id, task_id))""")
 
-DEFAULT = {
-    "users": {},
-    "withdrawals": [],
-    "promocodes": {},
-    "ads": {},
-    "greeting": {
-        "text": "👋 Добро пожаловать!\n\n⭐️ Зарабатывай Telegram Stars, выполняя задания.",
-        "media": None,
-        "buttons": [],
-    },
-    "settings": {
-        "ref_percent": 10,
-        "task_reward": 0.4,
-        "withdraw_channel": "",
-        "withdraw_counter": 0,
-        "services_enabled": {
-            "botohub": True, "tgrass": True, "traffy": True,
-            "trafsly": True, "piarflow": True,
-        },
-        "service_keys": {
-            "botohub": "", "tgrass": "", "traffy": "",
-            "trafsly": "", "piarflow": "",
-        },
-    },
-    "stats": {
-        "total_users": 0, "new_today": 0, "new_today_date": "",
-        "tasks_done_total": 0, "tasks_done_today": 0, "tasks_done_yesterday": 0,
-        "refs_total": 0, "withdrawn_total": 0.0, "hold_total": 0.0,
-        "unsubscribed_total": 0,
-    },
-}
+    cur.execute("PRAGMA table_info(custom_tasks)")
+    cols = {r[1] for r in cur.fetchall()}
+    if "check_type" not in cols:
+        cur.execute("ALTER TABLE custom_tasks ADD COLUMN check_type TEXT DEFAULT 'bot'")
+    if "check_target" not in cols:
+        cur.execute("ALTER TABLE custom_tasks ADD COLUMN check_target TEXT DEFAULT ''")
 
-_data: Optional[dict] = None
+    cur.execute("""CREATE TABLE IF NOT EXISTS ad_sources (
+        code TEXT PRIMARY KEY,
+        owner_id INTEGER,
+        owner_username TEXT,
+        created_at TEXT
+    )""")
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    cur.execute("""CREATE TABLE IF NOT EXISTS ad_users (
+        user_id INTEGER PRIMARY KEY,
+        code TEXT,
+        registered_at TEXT,
+        passed_op INTEGER DEFAULT 0,
+        passed_op_at TEXT,
+        blocked INTEGER DEFAULT 0,
+        refs_count INTEGER DEFAULT 0,
+        stars_earned INTEGER DEFAULT 0
+    )""")
 
-def _iso(dt: datetime) -> str:
-    return dt.isoformat()
+    cur.execute("""CREATE TABLE IF NOT EXISTS task_completed (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        offer_id INTEGER,
+        reward INTEGER,
+        done_at TEXT
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_task_completed_user ON task_completed(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_task_completed_date ON task_completed(done_at)")
 
-def _parse(s: str) -> datetime:
-    return datetime.fromisoformat(s)
+    cur.execute("""CREATE TABLE IF NOT EXISTS piarflow_offers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        link TEXT,
+        status TEXT DEFAULT 'pending',
+        created_at TEXT
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_offers_user ON piarflow_offers(user_id)")
 
-def _load():
-    global _data
-    if _data is not None:
-        return
-    if os.path.exists(config.DB_PATH):
-        try:
-            with open(config.DB_PATH, "r", encoding="utf-8") as f:
-                _data = json.load(f)
-        except Exception:
-            _data = json.loads(json.dumps(DEFAULT))
-    else:
-        _data = json.loads(json.dumps(DEFAULT))
+    cur.execute("PRAGMA table_info(promos)")
+    cols = {r[1] for r in cur.fetchall()}
+    if "amount_min" not in cols:
+        cur.execute("ALTER TABLE promos ADD COLUMN amount_min INTEGER DEFAULT 0")
 
-    for k, v in DEFAULT.items():
-        if k not in _data:
-            _data[k] = v
-    for k, v in DEFAULT["settings"].items():
-        if k not in _data["settings"]:
-            _data["settings"][k] = v
-    for k, v in DEFAULT["stats"].items():
-        if k not in _data["stats"]:
-            _data["stats"][k] = v
+    cur.execute("PRAGMA table_info(ad_sources)")
+    cols = {r[1] for r in cur.fetchall()}
+    if "clicks" not in cols:
+        cur.execute("ALTER TABLE ad_sources ADD COLUMN clicks INTEGER DEFAULT 0")
+    if "price_per_click" not in cols:
+        cur.execute("ALTER TABLE ad_sources ADD COLUMN price_per_click INTEGER DEFAULT 0")
 
-def _save():
-    tmp = config.DB_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(_data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, config.DB_PATH)
+    cur.execute("PRAGMA table_info(ad_users)")
+    cols = {r[1] for r in cur.fetchall()}
+    if "registered" not in cols:
+        cur.execute("ALTER TABLE ad_users ADD COLUMN registered INTEGER DEFAULT 0")
+    if "is_premium" not in cols:
+        cur.execute("ALTER TABLE ad_users ADD COLUMN is_premium INTEGER DEFAULT 0")
 
-async def init():
-    async with _lock:
-        _load()
-        today = _now().strftime("%Y-%m-%d")
-        if _data["stats"].get("new_today_date") != today:
-            _data["stats"]["tasks_done_yesterday"] = _data["stats"].get("tasks_done_today", 0)
-            _data["stats"]["tasks_done_today"] = 0
-            _data["stats"]["new_today"] = 0
-            _data["stats"]["new_today_date"] = today
-            _save()
+    cur.execute("""CREATE TABLE IF NOT EXISTS ad_daily (
+        code TEXT,
+        date TEXT,
+        clicks INTEGER DEFAULT 0,
+        users_new INTEGER DEFAULT 0,
+        PRIMARY KEY (code, date)
+    )""")
 
-async def get_user(user_id: int) -> Optional[dict]:
-    async with _lock:
-        _load()
-        return _data["users"].get(str(user_id))
+    cur.execute("""CREATE TABLE IF NOT EXISTS withdraw_waiting (
+        user_id INTEGER PRIMARY KEY,
+        gift_key TEXT,
+        created_at TEXT
+    )""")
 
-async def create_user(user_id: int, username: Optional[str], first_name: str, referrer_id: Optional[int] = None, ad_code: Optional[str] = None) -> dict:
-    async with _lock:
-        _load()
-        uid = str(user_id)
-        if uid in _data["users"]:
-            return _data["users"][uid]
+    cur.execute("PRAGMA table_info(users)")
+    cols = {r[1] for r in cur.fetchall()}
+    if "welcome_bonus_paid" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN welcome_bonus_paid INTEGER DEFAULT 0")
+        cur.execute("UPDATE users SET welcome_bonus_paid = 1")
 
-        if referrer_id and str(referrer_id) == uid:
-            referrer_id = None
+    conn.commit()
+    conn.close()
 
-        user = {
-            "user_id": user_id, "username": username, "first_name": first_name or "",
-            "balance": 0.0, "hold": 0.0, "total_withdrawn": 0.0,
-            "referrer_id": referrer_id, "refs_count": 0, "refs_earned": 0.0,
-            "tasks_done": 0, "reg_date": _iso(_now()), "is_banned": False,
-            "is_fake_botohub": False, "skipped_tasks": [], "hold_items": [],
-            "ad_code": ad_code,
-        }
-        _data["users"][uid] = user
-        st = _data["stats"]
-        st["total_users"] = len(_data["users"])
-        st["new_today"] += 1
 
-        if referrer_id:
-            ref = _data["users"].get(str(referrer_id))
-            if ref:
-                ref["refs_count"] += 1
-                st["refs_total"] += 1
-        _save()
-        return user
+# ================== SETTINGS ==================
+def get_setting(key):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else DEFAULTS.get(key, "")
 
-async def update_user(user_id: int, **fields):
-    async with _lock:
-        _load()
-        u = _data["users"].get(str(user_id))
-        if u:
-            for k, v in fields.items():
-                u[k] = v
-            _save()
 
-async def add_balance(user_id: int, amount: float):
-    async with _lock:
-        _load()
-        u = _data["users"].get(str(user_id))
-        if u:
-            u["balance"] = round(u["balance"] + amount, 4)
-            _save()
+def set_setting(key, value):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+    conn.commit()
+    conn.close()
 
-async def add_hold(user_id: int, amount: float, kind: str = "task", from_user: Optional[int] = None, task_id: Optional[str] = None, hours: int = 24):
-    async with _lock:
-        _load()
-        u = _data["users"].get(str(user_id))
-        if not u: return
-        unlock = _now() + timedelta(hours=hours)
-        u["hold"] = round(u["hold"] + amount, 4)
-        u["hold_items"].append({
-            "amount": round(amount, 4), "kind": kind, "from_user": from_user,
-            "task_id": task_id, "created_at": _iso(_now()), "unlock_at": _iso(unlock),
-        })
-        _data["stats"]["hold_total"] = round(_data["stats"].get("hold_total", 0) + amount, 4)
-        _save()
 
-async def process_holds() -> list[tuple[int, float, str]]:
-    released = []
-    async with _lock:
-        _load()
-        now = _now()
-        for uid, u in _data["users"].items():
-            remaining = []
-            for item in u.get("hold_items", []):
-                try:
-                    unlock = _parse(item["unlock_at"])
-                except Exception:
-                    continue
-                if unlock <= now:
-                    amount = float(item["amount"])
-                    u["balance"] = round(u["balance"] + amount, 4)
-                    u["hold"] = round(max(0, u["hold"] - amount), 4)
-                    released.append((int(uid), amount, item.get("kind", "task")))
-                else:
-                    remaining.append(item)
-            if len(remaining) != len(u.get("hold_items", [])):
-                u["hold_items"] = remaining
-        if released:
-            _save()
-    return released
+# ================== USERS ==================
+def get_user(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
 
-async def increment_tasks_done(user_id: int):
-    async with _lock:
-        _load()
-        u = _data["users"].get(str(user_id))
-        if u:
-            u["tasks_done"] += 1
-            # Если юзер пришел с рекламы, засчитываем ей выполнение
-            if u.get("ad_code") and u["ad_code"] in _data["ads"]:
-                _data["ads"][u["ad_code"]]["tasks_done"] += 1
-        _data["stats"]["tasks_done_total"] += 1
-        _data["stats"]["tasks_done_today"] += 1
-        _save()
 
-async def add_ref_earned(user_id: int, amount: float):
-    async with _lock:
-        _load()
-        u = _data["users"].get(str(user_id))
-        if u:
-            u["refs_earned"] = round(u["refs_earned"] + amount, 4)
-            _save()
-
-async def get_setting(key: str, default=None):
-    async with _lock:
-        _load()
-        return _data["settings"].get(key, default)
-
-async def set_setting(key: str, value: Any):
-    async with _lock:
-        _load()
-        _data["settings"][key] = value
-        _save()
-
-async def get_service_enabled(name: str) -> bool:
-    async with _lock:
-        _load()
-        return bool(_data["settings"]["services_enabled"].get(name, False))
-
-async def set_service_enabled(name: str, enabled: bool):
-    async with _lock:
-        _load()
-        _data["settings"]["services_enabled"][name] = enabled
-        _save()
-
-async def get_service_key(name: str) -> str:
-    async with _lock:
-        _load()
-        return _data["settings"]["service_keys"].get(name, "")
-
-async def set_service_key(name: str, key: str):
-    async with _lock:
-        _load()
-        _data["settings"]["service_keys"][name] = key
-        _save()
-
-async def get_stats() -> dict:
-    async with _lock:
-        _load()
-        return dict(_data["stats"])
-
-async def get_top_users(limit: int = 5) -> list[dict]:
-    async with _lock:
-        _load()
-        users = sorted(_data["users"].values(), key=lambda u: (u.get("tasks_done", 0), u.get("balance", 0)), reverse=True)
-        return [dict(u) for u in users[:limit]]
-
-async def create_withdrawal(user_id: int, username: Optional[str], first_name: str, amount: float) -> dict:
-    async with _lock:
-        _load()
-        u = _data["users"].get(str(user_id))
-        if not u or u["balance"] < amount:
-            return {"error": "not_enough"}
-        u["balance"] = round(u["balance"] - amount, 4)
-        _data["settings"]["withdraw_counter"] += 1
-        wid = _data["settings"]["withdraw_counter"]
-        w = {
-            "id": wid, "user_id": user_id, "username": username, "first_name": first_name,
-            "amount": round(amount, 4), "status": "pending", "created_at": _iso(_now()), "channel_msg_id": None,
-        }
-        _data["withdrawals"].append(w)
-        _save()
-        return w
-
-async def get_withdrawal(wid: int) -> Optional[dict]:
-    async with _lock:
-        _load()
-        for w in _data["withdrawals"]:
-            if w["id"] == wid: return dict(w)
-        return None
-
-async def list_withdrawals(status: Optional[str] = None) -> list[dict]:
-    async with _lock:
-        _load()
-        items = _data["withdrawals"]
-        if status: items = [w for w in items if w["status"] == status]
-        return [dict(w) for w in items]
-
-async def update_withdrawal(wid: int, status: str):
-    async with _lock:
-        _load()
-        for w in _data["withdrawals"]:
-            if w["id"] == wid:
-                w["status"] = status
-                if status == "accepted":
-                    u = _data["users"].get(str(w["user_id"]))
-                    if u:
-                        u["total_withdrawn"] = round(u["total_withdrawn"] + w["amount"], 4)
-                        _data["stats"]["withdrawn_total"] = round(_data["stats"].get("withdrawn_total", 0) + w["amount"], 4)
-                elif status == "rejected":
-                    u = _data["users"].get(str(w["user_id"]))
-                    if u: u["balance"] = round(u["balance"] + w["amount"], 4)
-                _save()
-                return True
+def add_user(user_id, username, referrer_id=None):
+    if get_user(user_id):
         return False
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO users (user_id, username, referrer_id, registered_at) VALUES (?, ?, ?, ?)",
+                (user_id, username, referrer_id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    return True
 
-async def set_withdrawal_msg(wid: int, msg_id: int):
-    async with _lock:
-        _load()
-        for w in _data["withdrawals"]:
-            if w["id"] == wid:
-                w["channel_msg_id"] = msg_id
-                _save()
-                return
 
-async def create_promocode(code: str, amount: float, limit: int) -> dict:
-    async with _lock:
-        _load()
-        if code in _data["promocodes"]:
-            return {"error": "exists"}
-        _data["promocodes"][code] = {"code": code, "amount": round(amount, 4), "limit": limit, "used": 0, "users": []}
-        _save()
-        return _data["promocodes"][code]
+def update_username(user_id, username):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
+    conn.commit()
+    conn.close()
 
-async def use_promocode(code: str, user_id: int) -> dict:
-    async with _lock:
-        _load()
-        p = _data["promocodes"].get(code)
-        if not p: return {"error": "not_found"}
-        if user_id in p["users"]: return {"error": "already_used"}
-        if p["used"] >= p["limit"]: return {"error": "limit_reached"}
-        p["used"] += 1
-        p["users"].append(user_id)
-        u = _data["users"].get(str(user_id))
-        if u: u["balance"] = round(u["balance"] + p["amount"], 4)
-        _save()
-        return {"amount": p["amount"]}
 
-async def get_promocodes() -> list[dict]:
-    async with _lock:
-        _load()
-        return list(_data["promocodes"].values())
+def add_balance(user_id, amount):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
 
-async def create_ad(owner_id: int, name: str, price: float) -> dict:
-    async with _lock:
-        _load()
-        code = f"ad{len(_data['ads']) + 1}"
-        while code in _data["ads"]: code += "_"
-        _data["ads"][code] = {"code": code, "owner_id": owner_id, "name": name, "price": round(price, 4), "clicks": 0, "tasks_done": 0, "created_at": _iso(_now())}
-        _save()
-        return _data["ads"][code]
 
-async def get_ad(code: str) -> Optional[dict]:
-    async with _lock:
-        _load()
-        return _data["ads"].get(code)
+def get_balance(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else 0
 
-async def incr_ad_stat(code: str, field: str):
-    async with _lock:
-        _load()
-        ad = _data["ads"].get(code)
-        if ad and field in ad:
-            ad[field] += 1
-            _save()
 
-async def list_ads() -> list[dict]:
-    async with _lock:
-        _load()
-        return list(_data["ads"].values())
+def get_place(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users WHERE balance > (SELECT balance FROM users WHERE user_id = ?)", (user_id,))
+    place = cur.fetchone()[0] + 1
+    conn.close()
+    return place
 
-async def get_greeting() -> dict:
-    async with _lock:
-        _load()
-        return dict(_data["greeting"])
 
-async def set_greeting(**kwargs):
-    async with _lock:
-        _load()
-        for k, v in kwargs.items():
-            _data["greeting"][k] = v
-        _save()
+def can_take_bonus(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT last_bonus FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return True
+    last = datetime.fromisoformat(row[0])
+    return datetime.now() - last >= timedelta(hours=24)
 
-async def export_data() -> dict:
-    async with _lock:
-        _load()
-        return json.loads(json.dumps(_data))
 
-async def import_data(new_data: dict):
-    global _data
-    async with _lock:
-        _data = new_data
-        _load()
-        _save()
+def set_bonus_taken(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET last_bonus = ? WHERE user_id = ?", (datetime.now().isoformat(), user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_all_user_ids():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM users")
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def is_welcome_bonus_paid(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT welcome_bonus_paid FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return True
+    return bool(row[0])
+
+
+def mark_welcome_bonus_paid(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET welcome_bonus_paid = 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+# ================== REFERRALS ==================
+def create_pending_referral(user_id, referrer_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO referrals (user_id, referrer_id, created_at, status) VALUES (?, ?, ?, 'pending')",
+                (user_id, referrer_id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+def get_pending_refs_count(referrer_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND status = 'pending'", (referrer_id,))
+    n = cur.fetchone()[0]
+    conn.close()
+    return n
+
+
+def get_confirmed_refs_count(referrer_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND status = 'confirmed'", (referrer_id,))
+    n = cur.fetchone()[0]
+    conn.close()
+    return n
+
+
+def get_user_referrals(referrer_id, limit=100):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT r.user_id, u.username, r.created_at, r.status FROM referrals r LEFT JOIN users u ON u.user_id = r.user_id WHERE r.referrer_id = ? ORDER BY r.created_at DESC LIMIT ?",
+                (referrer_id, limit))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def confirm_referral(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT id, referrer_id FROM referrals WHERE user_id = ? AND status = 'pending' ORDER BY id LIMIT 1", (user_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return None
+    rid, referrer_id = row
+    cur.execute("UPDATE referrals SET status = 'confirmed' WHERE id = ?", (rid,))
+    conn.commit()
+    conn.close()
+    return referrer_id
+
+
+def expire_old_referrals():
+    threshold = (datetime.now() - timedelta(days=REFERRAL_DAYS)).isoformat()
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT id, user_id, referrer_id FROM referrals WHERE status = 'pending' AND created_at < ?", (threshold,))
+    rows = cur.fetchall()
+    for rid, _, _ in rows:
+        cur.execute("UPDATE referrals SET status = 'expired' WHERE id = ?", (rid,))
+    conn.commit()
+    conn.close()
+    return [(u, r) for _, u, r in rows]
+
+
+def get_refs_to_remind():
+    from config import REFERRAL_REMIND_MIN
+    threshold = (datetime.now() - timedelta(minutes=REFERRAL_REMIND_MIN)).isoformat()
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT id, user_id, referrer_id FROM referrals WHERE status = 'pending' AND reminded = 0 AND created_at < ?", (threshold,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def mark_reminded(rid):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE referrals SET reminded = 1 WHERE id = ?", (rid,))
+    conn.commit()
+    conn.close()
+
+
+# ================== WITHDRAWALS ==================
+def create_withdrawal(user_id, amount, gift):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO withdrawals (user_id, amount, gift, created_at) VALUES (?, ?, ?, ?)",
+                (user_id, amount, gift, datetime.now().isoformat()))
+    wid = cur.lastrowid
+    cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
+    return wid
+
+
+def get_withdrawal(wid):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT id, user_id, amount, gift, status FROM withdrawals WHERE id = ?", (wid,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def get_pending_withdrawals():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT id, user_id, amount, gift FROM withdrawals WHERE status = 'pending' ORDER BY id")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_pending_withdrawals_all():
+    return get_pending_withdrawals()
+
+
+def get_pending_withdrawal_by_id(wid):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT id, user_id, amount, gift FROM withdrawals WHERE id = ? AND status = 'pending'", (wid,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def count_pending_withdrawals():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'")
+    n = cur.fetchone()[0]
+    conn.close()
+    return n
+
+
+def accept_all_pending():
+    rows = get_pending_withdrawals_all()
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    for wid, _, _, _ in rows:
+        cur.execute("UPDATE withdrawals SET status = 'completed' WHERE id = ?", (wid,))
+    conn.commit()
+    conn.close()
+    return rows
+
+
+def reject_all_pending():
+    rows = get_pending_withdrawals_all()
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    for wid, user_id, amount, _ in rows:
+        cur.execute("UPDATE withdrawals SET status = 'rejected' WHERE id = ?", (wid,))
+        cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
+    return rows
+
+
+def get_withdrawal_history(limit=50):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT id, user_id, amount, gift, status, created_at FROM withdrawals WHERE status != 'pending' ORDER BY id DESC LIMIT ?", (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def set_withdrawal_status(wid, status):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE withdrawals SET status = ? WHERE id = ?", (status, wid))
+    conn.commit()
+    conn.close()
+
+
+# ================== STATS ==================
+def get_stats():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users")
+    total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM users WHERE registered_at LIKE ?", (str(date.today()) + "%",))
+    today = cur.fetchone()[0]
+    cur.execute("SELECT COALESCE(SUM(balance),0) FROM users")
+    total_balance = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM referrals WHERE status = 'confirmed'")
+    total_refs = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'")
+    pending = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'completed'")
+    done = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM withdrawals WHERE status = 'rejected'")
+    rejected = cur.fetchone()[0]
+    cur.execute("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status = 'completed'")
+    total_stars = cur.fetchone()[0]
+    conn.close()
+    return {"total": total, "today": today, "total_balance": total_balance,
+            "total_refs": total_refs, "pending": pending, "done": done,
+            "rejected": rejected, "total_stars": total_stars}
+
+
+def get_top_balance(limit=10):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, username, balance FROM users ORDER BY balance DESC LIMIT ?", (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_top_refs(limit=10):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("""SELECT u.user_id, u.username, COUNT(r.id) as refs FROM users u LEFT JOIN referrals r ON r.referrer_id = u.user_id AND r.status = 'confirmed' GROUP BY u.user_id HAVING refs > 0 ORDER BY refs DESC LIMIT ?""", (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+# ================== TASKS STATS ==================
+def mark_task_completed(user_id, offer_id, reward):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO task_completed (user_id, offer_id, reward, done_at) VALUES (?, ?, ?, ?)",
+        (user_id, offer_id, reward, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+def was_task_completed(user_id, offer_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM task_completed WHERE user_id = ? AND offer_id = ?",
+                (user_id, offer_id))
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+
+def get_task_stats(period=None):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    where = ""
+    params = []
+    if period == "today":
+        today = datetime.now().strftime("%Y-%m-%d")
+        where = "WHERE done_at LIKE ?"
+        params = [today + "%"]
+    elif period == "week":
+        threshold = (datetime.now() - timedelta(days=7)).isoformat()
+        where = "WHERE done_at >= ?"
+        params = [threshold]
+    elif period == "month":
+        threshold = (datetime.now() - timedelta(days=30)).isoformat()
+        where = "WHERE done_at >= ?"
+        params = [threshold]
+    cur.execute(f"SELECT COUNT(*), COUNT(DISTINCT user_id), COALESCE(SUM(reward),0) FROM task_completed {where}", params)
+    row = cur.fetchone()
+    conn.close()
+    return {"count": row[0] or 0, "unique_users": row[1] or 0, "stars": row[2] or 0}
+
+
+# ================== PROMOS ==================
+def create_promo(code, amount, max_uses, amount_min=0):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO promos (code, amount, max_uses, used, active, amount_min) "
+        "VALUES (?, ?, ?, 0, 1, ?)",
+        (code.upper(), amount, max_uses, amount_min))
+    conn.commit()
+    conn.close()
+
+
+def get_promo(code):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT code, amount, max_uses, used, active, amount_min FROM promos WHERE code = ?", (code.upper(),))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def list_promos():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT code, amount, max_uses, used, active, amount_min FROM promos ORDER BY code")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def delete_promo(code):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM promos WHERE code = ?", (code.upper(),))
+    cur.execute("DELETE FROM promo_uses WHERE code = ?", (code.upper(),))
+    conn.commit()
+    conn.close()
+
+
+def user_used_promo(code, user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM promo_uses WHERE code = ? AND user_id = ?", (code.upper(), user_id))
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+
+def get_promo_uses_list(code, limit=10):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("""SELECT pu.user_id, u.username, pu.used_at
+                   FROM promo_uses pu
+                   LEFT JOIN users u ON u.user_id = pu.user_id
+                   WHERE pu.code = ?
+                   ORDER BY pu.used_at DESC LIMIT ?""",
+                (code.upper(), limit))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def _calc_promo_amount(amount, amount_min):
+    if amount_min and amount_min < amount:
+        return random.randint(amount_min, amount)
+    return amount
+
+
+def activate_promo(code, user_id):
+    code = code.upper()
+    promo = get_promo(code)
+    if not promo:
+        return False, "❌ Такого промокода не существует.", 0
+    c, amount, max_uses, used, active, amount_min = promo
+    if not active:
+        return False, "❌ Промокод деактивирован.", 0
+    if used >= max_uses:
+        return False, "❌ Промокод больше не действует.", 0
+    if user_used_promo(code, user_id):
+        return False, "❌ Ты уже активировал этот промокод.", 0
+
+    calc = _calc_promo_amount(amount, amount_min)
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO promo_uses (code, user_id, used_at) VALUES (?, ?, ?)",
+                (code, user_id, datetime.now().isoformat()))
+    cur.execute("UPDATE promos SET used = used + 1 WHERE code = ?", (code,))
+    cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (calc, user_id))
+    conn.commit()
+    conn.close()
+    return True, f"✅ Промокод активирован! +{calc} ⭐", calc
+
+
+# ================== CUSTOM TASKS ==================
+def add_custom_task(title, link, check_type="bot", check_target=""):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO custom_tasks (title, link, reward, active, check_type, check_target) "
+        "VALUES (?, ?, 0, 1, ?, ?)",
+        (title, link, check_type, check_target))
+    conn.commit()
+    conn.close()
+
+
+def list_custom_tasks():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT id, title, link, reward, active, check_type, check_target FROM custom_tasks ORDER BY id")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_custom_task(task_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT id, title, link, reward, active, check_type, check_target FROM custom_tasks WHERE id = ?", (task_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def delete_custom_task(task_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM custom_tasks WHERE id = ?", (task_id,))
+    cur.execute("DELETE FROM custom_tasks_done WHERE task_id = ?", (task_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_next_custom_task(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, title, link, reward, check_type, check_target FROM custom_tasks "
+        "WHERE active = 1 AND id NOT IN "
+        "(SELECT task_id FROM custom_tasks_done WHERE user_id = ?) ORDER BY id LIMIT 1",
+        (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def mark_custom_task_done(user_id, task_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO custom_tasks_done (user_id, task_id, done_at) VALUES (?, ?, ?)",
+                (user_id, task_id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+# ================== AD SOURCES ==================
+def add_ad_source(code, owner_id, owner_username="", price_per_click=0):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO ad_sources (code, owner_id, owner_username, created_at, price_per_click) VALUES (?, ?, ?, ?, ?)",
+                (code.lower(), owner_id, owner_username or "", datetime.now().isoformat(), price_per_click))
+    conn.commit()
+    conn.close()
+
+
+def get_ad_source(code):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT code, owner_id, owner_username, created_at, clicks, price_per_click FROM ad_sources WHERE code = ?", (code.lower(),))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def list_ad_sources():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT code, owner_id, owner_username, created_at, clicks, price_per_click FROM ad_sources ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def delete_ad_source(code):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM ad_sources WHERE code = ?", (code.lower(),))
+    cur.execute("DELETE FROM ad_users WHERE code = ?", (code.lower(),))
+    cur.execute("DELETE FROM ad_daily WHERE code = ?", (code.lower(),))
+    conn.commit()
+    conn.close()
+
+
+def increment_ad_click(code, is_new_user):
+    today = datetime.now().strftime("%Y-%m-%d")
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE ad_sources SET clicks = clicks + 1 WHERE code = ?", (code.lower(),))
+    cur.execute("INSERT OR IGNORE INTO ad_daily (code, date, clicks, users_new) VALUES (?, ?, 0, 0)",
+                (code.lower(), today))
+    cur.execute("UPDATE ad_daily SET clicks = clicks + 1 WHERE code = ? AND date = ?",
+                (code.lower(), today))
+    if is_new_user:
+        cur.execute("UPDATE ad_daily SET users_new = users_new + 1 WHERE code = ? AND date = ?",
+                    (code.lower(), today))
+    conn.commit()
+    conn.close()
+
+
+def mark_ad_user(user_id, code, registered=0, is_premium=0):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO ad_users (user_id, code, registered_at, registered, is_premium) VALUES (?, ?, ?, ?, ?)",
+                (user_id, code.lower(), datetime.now().isoformat(), registered, is_premium))
+    conn.commit()
+    conn.close()
+
+
+def mark_ad_user_op(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE ad_users SET passed_op = 1, passed_op_at = ? WHERE user_id = ? AND passed_op = 0",
+                (datetime.now().isoformat(), user_id))
+    conn.commit()
+    conn.close()
+
+
+def mark_ad_user_blocked(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE ad_users SET blocked = 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def increment_ad_refs(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT referrer_id FROM users WHERE user_id = ?", (user_id,))
+    r = cur.fetchone()
+    if not r or not r[0]:
+        conn.close()
+        return
+    referrer_id = r[0]
+    cur.execute("UPDATE ad_users SET refs_count = refs_count + 1 WHERE user_id = ?", (referrer_id,))
+    conn.commit()
+    conn.close()
+
+
+def add_ad_stars(user_id, amount):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE ad_users SET stars_earned = stars_earned + ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_ad_stats_period(code, start_iso=None, end_iso=None):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+
+    if start_iso and end_iso:
+        cur.execute("""SELECT
+            COUNT(*),
+            SUM(CASE WHEN registered=1 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN passed_op=1 AND passed_op_at >= ? AND passed_op_at < ? THEN 1 ELSE 0 END),
+            SUM(CASE WHEN blocked=1 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN is_premium=1 THEN 1 ELSE 0 END),
+            COALESCE(SUM(stars_earned),0)
+            FROM ad_users WHERE code = ? AND registered_at >= ? AND registered_at < ?""",
+                    (start_iso, end_iso, code.lower(), start_iso, end_iso))
+    else:
+        cur.execute("""SELECT
+            COUNT(*),
+            SUM(CASE WHEN registered=1 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN passed_op=1 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN blocked=1 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN is_premium=1 THEN 1 ELSE 0 END),
+            COALESCE(SUM(stars_earned),0)
+            FROM ad_users WHERE code = ?""", (code.lower(),))
+    row = cur.fetchone()
+    users = row[0] or 0
+    registered = row[1] or 0
+    op = row[2] or 0
+    blocked = row[3] or 0
+    premium = row[4] or 0
+    stars = row[5] or 0
+
+    if start_iso and end_iso:
+        start_date = start_iso[:10]
+        end_date = end_iso[:10]
+        cur.execute("SELECT COALESCE(SUM(clicks),0) FROM ad_daily WHERE code = ? AND date >= ? AND date < ?",
+                    (code.lower(), start_date, end_date))
+    else:
+        cur.execute("SELECT COALESCE(clicks,0) FROM ad_sources WHERE code = ?", (code.lower(),))
+    clicks_row = cur.fetchone()
+    clicks = clicks_row[0] if clicks_row else 0
+
+    conn.close()
+    return {
+        "clicks": clicks,
+        "users": users,
+        "registered": registered,
+        "op": op,
+        "blocked": blocked,
+        "premium": premium,
+        "stars": stars,
+    }
+
+
+# ================== WITHDRAW WAITING ==================
+def set_waiting_withdraw(user_id, gift_key):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO withdraw_waiting (user_id, gift_key, created_at) VALUES (?, ?, ?)",
+                (user_id, gift_key, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+def get_waiting_withdraw(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, gift_key, created_at FROM withdraw_waiting WHERE user_id = ?",
+                (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def delete_waiting_withdraw(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM withdraw_waiting WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+# ================== PIARFLOW OFFERS ==================
+def pf_save_offers(user_id, links):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM piarflow_offers WHERE user_id = ?", (user_id,))
+    now = datetime.now().isoformat()
+    for link in links:
+        cur.execute(
+            "INSERT INTO piarflow_offers (user_id, link, status, created_at) VALUES (?, ?, 'pending', ?)",
+            (user_id, link, now))
+    conn.commit()
+    conn.close()
+
+
+def pf_get_next_offer(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, link FROM piarflow_offers WHERE user_id = ? AND status = 'pending' ORDER BY id LIMIT 1",
+        (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return (row[0], row[1]) if row else (None, None)
+
+
+def pf_mark_offer(offer_id, status):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("UPDATE piarflow_offers SET status = ? WHERE id = ?", (status, offer_id))
+    conn.commit()
+    conn.close()
+
+
+def pf_restore_skipped_if_old(user_id, hours=1):
+    threshold = (datetime.now() - timedelta(hours=hours)).isoformat()
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE piarflow_offers SET status = 'pending' WHERE user_id = ? AND status = 'skipped' AND created_at < ?",
+        (user_id, threshold))
+    conn.commit()
+    conn.close()
+
+
+def pf_count_pending(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM piarflow_offers WHERE user_id = ? AND status = 'pending'", (user_id,))
+    n = cur.fetchone()[0]
+    conn.close()
+    return n
+
+
+def pf_count_total(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM piarflow_offers WHERE user_id = ?", (user_id,))
+    n = cur.fetchone()[0]
+    conn.close()
+    return n
+
+
+# ================== БЭКАП ==================
+def export_users_to_json():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, username, balance, last_bonus, referrer_id, registered_at, welcome_bonus_paid FROM users")
+    users = [{"user_id": r[0], "username": r[1], "balance": r[2],
+              "last_bonus": r[3], "referrer_id": r[4], "registered_at": r[5],
+              "welcome_bonus_paid": r[6]}
+             for r in cur.fetchall()]
+    cur.execute("SELECT user_id, referrer_id, created_at, status FROM referrals")
+    referrals = [{"user_id": r[0], "referrer_id": r[1], "created_at": r[2], "status": r[3]}
+                 for r in cur.fetchall()]
+    cur.execute("SELECT code, amount, max_uses, used, active, amount_min FROM promos")
+    promos = [{"code": r[0], "amount": r[1], "max_uses": r[2], "used": r[3],
+               "active": r[4], "amount_min": r[5]}
+              for r in cur.fetchall()]
+    cur.execute("SELECT user_id, amount, gift, status, created_at FROM withdrawals")
+    withdrawals = [{"user_id": r[0], "amount": r[1], "gift": r[2],
+                    "status": r[3], "created_at": r[4]}
+                   for r in cur.fetchall()]
+    cur.execute("SELECT key, value FROM settings")
+    settings = {r[0]: r[1] for r in cur.fetchall()}
+    cur.execute("SELECT user_id, offer_id, reward, done_at FROM task_completed")
+    tasks = [{"user_id": r[0], "offer_id": r[1], "reward": r[2], "done_at": r[3]} for r in cur.fetchall()]
+    cur.execute("SELECT code, owner_id, owner_username, created_at FROM ad_sources")
+    ad_sources = [{"code": r[0], "owner_id": r[1], "owner_username": r[2], "created_at": r[3]}
+                  for r in cur.fetchall()]
+    conn.close()
+    return {"exported_at": datetime.now().isoformat(),
+            "users": users, "referrals": referrals, "promos": promos,
+            "withdrawals": withdrawals, "settings": settings,
+            "task_completed": tasks, "ad_sources": ad_sources}
+
+
+def import_users_from_json(data):
+    conn = sqlite3.connect(DB)
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        count = 0
+        for u in data.get("users", []):
+            cur.execute(
+                "INSERT OR REPLACE INTO users "
+                "(user_id, username, balance, last_bonus, referrer_id, registered_at, welcome_bonus_paid) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (u["user_id"], u.get("username"), u.get("balance", 0),
+                 u.get("last_bonus"), u.get("referrer_id"), u.get("registered_at"),
+                 u.get("welcome_bonus_paid", 1)))
+            count += 1
+        cur.execute("DELETE FROM referrals")
+        for r in data.get("referrals", []):
+            cur.execute("INSERT INTO referrals (user_id, referrer_id, created_at, status) VALUES (?,?,?,?)",
+                        (r["user_id"], r["referrer_id"], r.get("created_at"), r.get("status", "pending")))
+        for p in data.get("promos", []):
+            cur.execute("INSERT OR REPLACE INTO promos (code, amount, max_uses, used, active, amount_min) VALUES (?,?,?,?,?,?)",
+                        (p["code"], p["amount"], p["max_uses"], p.get("used", 0),
+                         p.get("active", 1), p.get("amount_min", 0)))
+        cur.execute("DELETE FROM withdrawals")
+        for w in data.get("withdrawals", []):
+            cur.execute("INSERT INTO withdrawals (user_id, amount, gift, status, created_at) VALUES (?,?,?,?,?)",
+                        (w["user_id"], w["amount"], w.get("gift"), w.get("status", "pending"), w.get("created_at")))
+        for s_key, s_val in data.get("settings", {}).items():
+            cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (s_key, s_val))
+        for t in data.get("task_completed", []):
+            cur.execute("INSERT INTO task_completed (user_id, offer_id, reward, done_at) VALUES (?,?,?,?)",
+                        (t["user_id"], t["offer_id"], t["reward"], t["done_at"]))
+        conn.commit()
+        return count
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

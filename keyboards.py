@@ -1,138 +1,314 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton
+)
+from config import GIFTS, GIFTS_ORDER, GIFTS_EMOJI
 
-SERVICES = {"botohub": "Botohub", "tgrass": "Tgrass", "traffy": "Traffy", "trafsly": "Trafsly", "piarflow": "PiarFlow"}
 
-def main_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="⭐️ Заработать Звезды")],
-            [KeyboardButton(text="👥 Рефералы"), KeyboardButton(text="👤 Профиль")],
-            [KeyboardButton(text="💸 Вывод"), KeyboardButton(text="📊 Статистика")],
-        ], resize_keyboard=True)
+def main_menu():
+    return ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
+        [KeyboardButton(text="Заработать звёзды", icon_custom_emoji_id="5438496463044752972")],
+        [KeyboardButton(text="Вывести звёзды", icon_custom_emoji_id="6025976946083500432")],
+        [KeyboardButton(text="Задания", icon_custom_emoji_id="5427168083074628963"),
+         KeyboardButton(text="Прочее", icon_custom_emoji_id="5325971446625758812")],
+    ])
 
-def ref_link(bot_username: str, user_id: int) -> str:
-    return f"https://t.me/{bot_username}?start={user_id}"
 
-from aiogram.types import CopyTextButton
-
-def referral_kb(bot_username: str, user_id: int) -> InlineKeyboardMarkup:
-    link = ref_link(bot_username, user_id)
-    share_url = f"https://t.me/share/url?url={link}&text=Заходи в бота, тут раздают звёзды ⭐️"
+def earn_kb(share_url):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Отправить ссылку друзьям", url=share_url)],
+        [InlineKeyboardButton(text="Пригласить друга", url=share_url,
+                              icon_custom_emoji_id="5258362837411045098")],
+    ])
+
+
+def profile_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Ежедневный бонус", callback_data="daily_bonus",
+                              icon_custom_emoji_id="5449800250032143374")],
+        [InlineKeyboardButton(text="Ввести промокод", callback_data="enter_promo",
+                              icon_custom_emoji_id="5197468864102823838")],
+    ])
+
+
+def gifts_kb():
+    buttons = []
+    row = []
+    for key in GIFTS_ORDER:
+        if key not in GIFTS:
+            continue
+        name, price = GIFTS[key]
+        row.append(InlineKeyboardButton(
+            text=f"{name} · {price}⭐",
+            callback_data=f"gift:{key}",
+            icon_custom_emoji_id=GIFTS_EMOJI.get(key)
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def daily_bonus_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Забрать", callback_data="daily_claim",
+                              icon_custom_emoji_id="6026257381678124710")],
+        [InlineKeyboardButton(text="Назад", callback_data="daily_cancel",
+                              icon_custom_emoji_id="5258236805890710909")],
+    ])
+
+
+def daily_back_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Назад", callback_data="daily_back",
+                              icon_custom_emoji_id="5258236805890710909")],
+    ])
+
+
+def promo_cancel_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Отмена", callback_data="promo_cancel",
+                              icon_custom_emoji_id="5210952531676504517")],
+    ])
+
+
+def op_screen_kb(items, confirm_callback="op_check"):
+    buttons = []
+    row = []
+    for i, (op_key, title, url, passed) in enumerate(items, 1):
+        prefix = "✅ " if passed else ""
+        row.append(InlineKeyboardButton(
+            text=f"{prefix}{title} {i}",
+            url=url,
+            icon_custom_emoji_id="5253742260054409879"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton(
+        text="Я подписался", callback_data=confirm_callback,
+        icon_custom_emoji_id="6026257381678124710")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def friends_check_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Проверить", callback_data="wd_friends_check",
+                              icon_custom_emoji_id="5920433463428650761")],
+    ])
+
+
+def admin_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎯 ОП-сервисы", callback_data="op_services"),
+         InlineKeyboardButton(text="📋 Заявки", callback_data="wd_list")],
+        [InlineKeyboardButton(text="🎛 Приватка", callback_data="priv_menu"),
+         InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
+        [InlineKeyboardButton(text="🎯 Задания PiarFlow", callback_data="tasks_menu")],
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="broadcast_menu"),
+         InlineKeyboardButton(text="🎟 Промокоды", callback_data="promos")],
+        [InlineKeyboardButton(text="📊 Реклама", callback_data="ad_menu"),
+         InlineKeyboardButton(text="👤 Пользователь", callback_data="user_find")],
+        [InlineKeyboardButton(text="🔑 API-ключи", callback_data="api_keys")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings"),
+         InlineKeyboardButton(text="📦 Бэкап", callback_data="backup_help")],
+    ])
+
+
+def op_services_kb(tgrass_enabled, traffy_enabled):
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="📋 Скопировать ссылку", 
-            copy_text=CopyTextButton(text=link)
-        )],
+            text=f"🌿 Tgrass {'🟢' if tgrass_enabled else '🔴'}",
+            callback_data="os_tgrass")],
+        [InlineKeyboardButton(
+            text=f"📊 Traffy {'🟢' if traffy_enabled else '🔴'}",
+            callback_data="os_traffy")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-# Добавь это где-то рядом с main_menu_kb
-def profile_kb() -> InlineKeyboardMarkup:
+
+def op_service_detail_kb(service, enabled):
+    status = "🔴 Выключить" if enabled else "🟢 Включить"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💸 Вывести звезды", callback_data="go_withdraw")]
+        [InlineKeyboardButton(text="📥 Лимит на входе", callback_data=f"os_{service}_entry")],
+        [InlineKeyboardButton(text="💸 Лимит на выводе", callback_data=f"os_{service}_wd")],
+        [InlineKeyboardButton(text=status, callback_data=f"os_{service}_toggle")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="op_services")],
     ])
 
-# Замени tasks_finished_kb полностью:
-def tasks_finished_kb(bot_username: str, user_id: int) -> InlineKeyboardMarkup:
-    link = ref_link(bot_username, user_id)
-    share_url = f"https://t.me/share/url?url={link}&text=Заходи в бота, тут раздают звёзды ⭐️"
+
+def api_keys_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Пригласить друзей", url=share_url)],
-        [InlineKeyboardButton(text="🔙 В меню", callback_data="back_menu")]
+        [InlineKeyboardButton(text="🌿 Tgrass", callback_data="key_tgrass")],
+        [InlineKeyboardButton(text="📊 Traffy", callback_data="key_traffy")],
+        [InlineKeyboardButton(text="🎯 PiarFlow", callback_data="key_piarflow")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-def withdraw_kb() -> InlineKeyboardMarkup:
+
+def user_manage_kb(uid):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="15 ⭐️", callback_data="withdraw_15"), InlineKeyboardButton(text="25 ⭐️", callback_data="withdraw_25")],
-        [InlineKeyboardButton(text="50 ⭐️", callback_data="withdraw_50"), InlineKeyboardButton(text="100 ⭐️", callback_data="withdraw_100")],
+        [InlineKeyboardButton(text="➕ Начислить", callback_data=f"um_add:{uid}"),
+         InlineKeyboardButton(text="➖ Списать", callback_data=f"um_sub:{uid}")],
+        [InlineKeyboardButton(text="👥 Рефералы", callback_data=f"user_refs:{uid}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-def task_kb(subscribe_url: str) -> InlineKeyboardMarkup:
+
+def tasks_kb(enabled):
+    status = "🔴 Выключить" if enabled else "🟢 Включить"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Подписаться", url=subscribe_url)],
-        [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="task_check")],
-        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="task_skip")],
+        [InlineKeyboardButton(text="💰 Награда за задание", callback_data="tasks_edit_reward")],
+        [InlineKeyboardButton(text=status, callback_data="tasks_toggle")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-def stats_kb() -> InlineKeyboardMarkup:
+
+def admin_wd_kb(wid):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐️ Заработать Звезды", callback_data="go_earn")]
+        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"wd_ok:{wid}"),
+         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"wd_no:{wid}")]
     ])
 
-def tasks_finished_kb(bot_username: str, user_id: int) -> InlineKeyboardMarkup:
-    link = ref_link(bot_username, user_id)
+
+def wd_page_kb(wid, idx, total):
+    nav_row = []
+    if idx > 0:
+        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"wd_page:{idx-1}"))
+    nav_row.append(InlineKeyboardButton(text=f"{idx+1}/{total}", callback_data="wd_noop"))
+    if idx < total - 1:
+        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"wd_page:{idx+1}"))
+
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Пригласить друзей", switch_inline_query=f"🎁 Заходи в бота, тут раздают звёзды ⭐️\n\n{link}")],
-        [InlineKeyboardButton(text="🔙 В меню", callback_data="back_menu")]
+        nav_row,
+        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"wd_ok:{wid}"),
+         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"wd_no:{wid}")],
+        [InlineKeyboardButton(text="✅✅ Принять все", callback_data="wd_accept_all"),
+         InlineKeyboardButton(text="❌❌ Отклонить все", callback_data="wd_reject_all")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-# --- АДМИН ---
-def admin_menu_kb() -> InlineKeyboardMarkup:
+
+def wd_empty_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1. 🤝 Спонсоры", callback_data="adm_services"), InlineKeyboardButton(text="2. 📋 Заявки", callback_data="adm_withdrawals")],
-        [InlineKeyboardButton(text="3. 👋 Приветка", callback_data="adm_greeting"), InlineKeyboardButton(text="4. 📊 Статистика", callback_data="adm_stats")],
-        [InlineKeyboardButton(text="5. 📨 Рассылка", callback_data="adm_broadcast"), InlineKeyboardButton(text="6. 🎟 Промокоды", callback_data="adm_promos")],
-        [InlineKeyboardButton(text="7. 📢 Реклама", callback_data="adm_ads"), InlineKeyboardButton(text="8. ⚙️ Настройки", callback_data="adm_settings")],
-        [InlineKeyboardButton(text="9. 👤 Юзер", callback_data="adm_user"), InlineKeyboardButton(text="10. 💾 Бэкап", callback_data="adm_backup")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-def admin_back_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В админ-меню", callback_data="adm_back")]])
 
-def admin_services_kb(services_enabled: dict) -> InlineKeyboardMarkup:
-    rows = []
-    for key, label in SERVICES.items():
-        status = "🟢 Вкл" if services_enabled.get(key) else "🔴 Выкл"
-        rows.append([InlineKeyboardButton(text=f"{label} — {status}", callback_data=f"adm_svc_toggle_{key}")])
-    rows.append([InlineKeyboardButton(text="🔑 API-ключи", callback_data="adm_svc_keys")])
-    rows.append([InlineKeyboardButton(text="🔙 В админ-меню", callback_data="adm_back")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-def admin_services_keys_kb() -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=label, callback_data=f"adm_key_edit_{key}")] for key, label in SERVICES.items()]
-    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="adm_services")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-def admin_greeting_kb() -> InlineKeyboardMarkup:
+def priv_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Изменить текст", callback_data="adm_greet_text")],
-        [InlineKeyboardButton(text="🖼 Добавить/изменить медиа", callback_data="adm_greet_media")],
-        [InlineKeyboardButton(text="🔘 Добавить кнопку", callback_data="adm_greet_button")],
-        [InlineKeyboardButton(text="🗑 Очистить кнопки", callback_data="adm_greet_clear")],
-        [InlineKeyboardButton(text="🔙 В админ-меню", callback_data="adm_back")],
+        [InlineKeyboardButton(text="✏️ Изменить текст", callback_data="priv_edit_text")],
+        [InlineKeyboardButton(text="🔗 Настроить кнопки", callback_data="priv_edit_buttons")],
+        [InlineKeyboardButton(text="🗑 Удалить приватку", callback_data="priv_delete")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-def admin_withdraw_card_kb(wid: int, index: int, total: int) -> InlineKeyboardMarkup:
-    rows = []
-    if total > 1:
-        rows.append([InlineKeyboardButton(text="◀️", callback_data=f"adm_wd_nav_{(index - 1) if index > 0 else total - 1}"), InlineKeyboardButton(text=f"{index + 1}/{total}", callback_data="noop"), InlineKeyboardButton(text="▶️", callback_data=f"adm_wd_nav_{(index + 1) % total}")])
-    rows.append([InlineKeyboardButton(text="✅ Принять", callback_data=f"adm_wd_accept_{wid}"), InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_wd_reject_{wid}")])
-    rows.append([InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"adm_wd_skip_{wid}")])
-    rows.append([InlineKeyboardButton(text="🔙 В админ-меню", callback_data="adm_back")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def admin_promos_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Создать промокод", callback_data="adm_promo_create")], [InlineKeyboardButton(text="🔙 В админ-меню", callback_data="adm_back")]])
-
-def admin_ads_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Создать рекламу", callback_data="adm_ad_create")], [InlineKeyboardButton(text="📋 Список реклам", callback_data="adm_ad_list")], [InlineKeyboardButton(text="🔙 В админ-меню", callback_data="adm_back")]])
-
-def admin_settings_kb() -> InlineKeyboardMarkup:
+def broadcast_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 % с рефералов", callback_data="adm_set_ref_percent")],
-        [InlineKeyboardButton(text="⭐️ Цена за задание", callback_data="adm_set_task_reward")],
-        [InlineKeyboardButton(text="📢 Канал заявок", callback_data="adm_set_withdraw_channel")],
-        [InlineKeyboardButton(text="🔙 В админ-меню", callback_data="adm_back")],
+        [InlineKeyboardButton(text="✏️ Текст", callback_data="bc_edit_text")],
+        [InlineKeyboardButton(text="📎 Медиа", callback_data="bc_media_add"),
+         InlineKeyboardButton(text="🗑 Убрать медиа", callback_data="bc_media_del")],
+        [InlineKeyboardButton(text="🔗 Кнопки", callback_data="bc_edit_buttons")],
+        [InlineKeyboardButton(text="👥 Количество", callback_data="bc_edit_count")],
+        [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="bc_preview")],
+        [InlineKeyboardButton(text="✅ Отправить", callback_data="bc_send")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])
 
-def admin_backup_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📤 Скачать бэкап", callback_data="adm_backup_download")], [InlineKeyboardButton(text="🔙 В админ-меню", callback_data="adm_back")]])
 
-def admin_user_kb(uid: int, is_banned: bool) -> InlineKeyboardMarkup:
-    ban_text = "🔓 Разблокировать" if is_banned else "🚫 Заблокировать"
-    ban_cb = f"usr_unban_{uid}" if is_banned else f"usr_ban_{uid}"
+def broadcast_confirm_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Начислить", callback_data=f"usr_bal_plus_{uid}"), InlineKeyboardButton(text="➖ Списать", callback_data=f"usr_bal_minus_{uid}")],
-        [InlineKeyboardButton(text=ban_text, callback_data=ban_cb)],
-        [InlineKeyboardButton(text="🔙 В админ-меню", callback_data="adm_back")],
+        [InlineKeyboardButton(text="✅ Начать", callback_data="bc_start"),
+         InlineKeyboardButton(text="❌ Отмена", callback_data="admin_back")],
+    ])
+
+
+def broadcast_preview_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Текст", callback_data="bc_edit_text")],
+        [InlineKeyboardButton(text="📎 Медиа", callback_data="bc_media_add"),
+         InlineKeyboardButton(text="🗑 Убрать медиа", callback_data="bc_media_del")],
+        [InlineKeyboardButton(text="🔗 Кнопки", callback_data="bc_edit_buttons")],
+        [InlineKeyboardButton(text="👥 Количество", callback_data="bc_edit_count")],
+        [InlineKeyboardButton(text="✅ Отправить", callback_data="bc_send")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="broadcast_menu")],
+    ])
+
+
+def settings_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Бонус за реферала", callback_data="set:ref_bonus")],
+        [InlineKeyboardButton(text="🎁 Ежедневный бонус", callback_data="set:daily_bonus")],
+        [InlineKeyboardButton(text="💸 Минимум вывода", callback_data="set:min_withdraw")],
+        [InlineKeyboardButton(text="🎉 Бонус за /start", callback_data="set:welcome_bonus")],
+        [InlineKeyboardButton(text="👥 Друзей для вывода", callback_data="set:withdraw_friends_required")],
+        [InlineKeyboardButton(text="✏️ Текст под меню", callback_data="set:welcome_text")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+
+def promos_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать промокод", callback_data="promo_create")],
+        [InlineKeyboardButton(text="📜 Список промокодов", callback_data="promo_list")],
+        [InlineKeyboardButton(text="🗑 Удалить промокод", callback_data="promo_delete")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+
+def promo_list_kb(rows):
+    buttons = []
+    for code, amount, mx, used, active, amount_min in rows:
+        if active and used < mx:
+            icon = "🟢"
+        else:
+            icon = "🔴"
+        if amount_min and amount_min < amount:
+            label = f"{icon} {code} — {amount_min}-{amount}⭐ | {used}/{mx}"
+        else:
+            label = f"{icon} {code} — {amount}⭐ | {used}/{mx}"
+        buttons.append([InlineKeyboardButton(
+            text=label, callback_data=f"promo_view:{code}")])
+    buttons.append([InlineKeyboardButton(
+        text="⬅️ Назад", callback_data="admin_back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def promo_view_kb(code):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить этот промокод",
+                              callback_data=f"promo_del_confirm:{code}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="promo_list")],
+    ])
+
+
+def ad_menu_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить метку", callback_data="ad_add")],
+        [InlineKeyboardButton(text="📜 Список меток", callback_data="ad_list")],
+        [InlineKeyboardButton(text="🗑 Удалить метку", callback_data="ad_del")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+
+def user_view_kb(uid):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Список рефералов", callback_data=f"user_refs:{uid}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+
+def back_admin_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ])
+
+
+def stats_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="stats")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ])

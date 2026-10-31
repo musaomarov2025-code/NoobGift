@@ -1,5 +1,5 @@
-.env
 BOT_TOKEN
-bot_memory.db
+.env
+*.db
 __pycache__/
 *.pyc

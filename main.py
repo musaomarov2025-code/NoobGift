@@ -1,1 +1,3 @@
-TOKEN = "НОВЫЙ_ТОКЕН_ОТ_BOTFATHER"
+import os
+
+TOKEN = os.environ["BOT_TOKEN"]

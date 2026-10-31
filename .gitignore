@@ -1,5 +1,0 @@
-BOT_TOKEN
-.env
-*.db
-__pycache__/
-*.pyc

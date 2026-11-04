@@ -1,21 +1,26 @@
 import aiosqlite
 import json
+import os
+import asyncio
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from main import ADMIN_ID, DB_PATH, bot
 from database import (
     get_user, set_user_banned, get_setting, set_setting,
-    get_services, update_service_key, toggle_service, 
-    get_withdrawal, process_withdrawal
+    get_services, update_service_key, toggle_service, swap_service_priority,
+    get_withdrawal, process_withdrawal, add_promo, get_all_shows, delete_promo,
+    add_traffic_ad, get_traffic_ad, get_traffic_stats
 )
 from keyboards import (
     admin_main_kb, admin_user_kb, admin_withdraw_kb, 
-    admin_services_kb, admin_settings_kb, admin_back_kb
+    admin_services_kb, admin_settings_kb, admin_back_kb,
+    admin_broadcast_kb, admin_promos_kb, admin_ads_kb,
+    AdminStates
 )
-from keyboards import AdminStates
 
 admin_router = Router()
 
@@ -39,22 +44,18 @@ async def adm_stats(callback: CallbackQuery):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         
-        # Общая стата
         async with db.execute("SELECT COUNT(*) as users, SUM(total_earned) as earned, SUM(tasks_done) as tasks FROM users") as c:
             gen = await c.fetchone()
             
-        # Топ 6 сервисов
         async with db.execute("""
             SELECT service, COUNT(*) as cnt FROM task_completions 
             GROUP BY service ORDER BY cnt DESC LIMIT 6
         """) as c:
             top_services = await c.fetchall()
             
-        # Топ 1 по заданиям
         async with db.execute("SELECT username, tasks_done FROM users ORDER BY tasks_done DESC LIMIT 1") as c:
             top_tasks = await c.fetchone()
             
-        # Топ 1 по балансу
         async with db.execute("SELECT username, balance FROM users ORDER BY balance DESC LIMIT 1") as c:
             top_bal = await c.fetchone()
 
@@ -126,7 +127,6 @@ async def adm_user_ban(callback: CallbackQuery):
     
     status = "забанен" if new_ban else "разбанен"
     await callback.answer(f"Юзер {status}!")
-    # Перерисовываем меню
     await callback.message.edit_reply_markup(reply_markup=admin_user_kb(user_id, new_ban))
 
 @admin_router.callback_query(F.data.startswith("adm_usr_bal_"))
@@ -149,10 +149,9 @@ async def adm_user_bal_set(message: Message, state: FSMContext):
             await db.commit()
             
         await state.clear()
-        await message.answer(f"✅ Баланс юзера <code>{user_id}</code> изменен на {new_bal:.2f} ⭐")
+        await message.answer(f"✅ Баланс юзера <code>{user_id}</code> изменен на {new_bal:.2f} ⭐", reply_markup=admin_main_kb())
     except ValueError:
         await message.answer("❌ Ошибка. Введите число.")
-      from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ================= ЗАЯВКИ НА ВЫВОД =================
 @admin_router.callback_query(F.data == "adm_withdrawals")
@@ -167,11 +166,9 @@ async def adm_wd_list(callback: CallbackQuery):
         await callback.answer()
         return
 
-    # Получаем инфу о юзере
     user = await get_user(wd['user_id'])
     ref_user = await get_user(user['ref_by']) if user['ref_by'] else None
     
-    # Считаем задания его рефов
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT SUM(tasks_done) FROM users WHERE ref_by = ?", (user['id'],)) as c:
             ref_tasks = (await c.fetchone())[0] or 0
@@ -204,7 +201,6 @@ async def adm_wd_list(callback: CallbackQuery):
 
 @admin_router.callback_query(F.data == "adm_wd_skip")
 async def adm_wd_skip(callback: CallbackQuery):
-    # Просто листаем (по факту выводим следующую, логика уже в adm_wd_list)
     await adm_wd_list(callback)
 
 @admin_router.callback_query(F.data.startswith("adm_wd_ok_"))
@@ -294,13 +290,10 @@ async def adm_srv_priority(callback: CallbackQuery):
     if idx == -1: return
     
     if action == "up" and idx > 0:
-        # Меняем местами с предыдущим
         other_id = srv_list[idx-1]['id']
-        from database import swap_service_priority
         await swap_service_priority(srv_id, other_id)
     elif action == "down" and idx < len(srv_list) - 1:
         other_id = srv_list[idx+1]['id']
-        from database import swap_service_priority
         await swap_service_priority(srv_id, other_id)
         
     services = await get_services()
@@ -361,13 +354,11 @@ async def adm_set_reftasks_val(message: Message, state: FSMContext):
         await message.answer("✅ Настройка сохранена!", reply_markup=admin_main_kb())
     else:
         await message.answer("❌ Введите целое число.")
-      from aiogram.types import FSInputFile
-import os
 
 # ================= БЭКАП =================
 @admin_router.callback_query(F.data == "adm_backup")
 async def adm_backup_menu(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(AdminStates.waiting_for_user_search) # Сброс
+    await state.set_state(AdminStates.waiting_for_user_search)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать БД", callback_data="adm_bk_download")],
         [InlineKeyboardButton(text="📤 Загрузить БД", callback_data="adm_bk_upload")],
@@ -387,7 +378,7 @@ async def adm_bk_download(callback: CallbackQuery):
 
 @admin_router.callback_query(F.data == "adm_bk_upload")
 async def adm_bk_upload_start(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(AdminStates.broadcast_media) # Используем как ожидание файла
+    await state.set_state(AdminStates.broadcast_media)
     await callback.message.edit_text("📤 Отправьте файл базы данных (.db) для загрузки:", reply_markup=admin_back_kb())
     await callback.answer()
 
@@ -483,7 +474,12 @@ async def adm_bc_preview(callback: CallbackQuery, state: FSMContext):
         kb = builder.as_markup()
         
     if media:
-        await callback.message.answer_photo(media[1], caption=text, reply_markup=kb) if media[0] == 'photo' else await callback.message.answer_video(media[1], caption=text, reply_markup=kb)
+        if media[0] == 'photo':
+            await callback.message.answer_photo(media[1], caption=text, reply_markup=kb)
+        elif media[0] == 'video':
+            await callback.message.answer_video(media[1], caption=text, reply_markup=kb)
+        elif media[0] == 'animation':
+            await callback.message.answer_animation(media[1], caption=text, reply_markup=kb)
     else:
         await callback.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
     await callback.answer()
@@ -525,7 +521,7 @@ async def adm_bc_send(callback: CallbackQuery, state: FSMContext):
             count += 1
         except:
             pass
-        await asyncio.sleep(0.05) # Защита от лимитов TG
+        await asyncio.sleep(0.05)
         
     await callback.message.answer(f"✅ Рассылка завершена. Успешно: {count}")
 
@@ -595,14 +591,12 @@ async def adm_promo_buttons_set(message: Message, state: FSMContext):
             await message.answer("❌ Ошибка кнопок. Попробуй снова.")
             return
             
-    from database import add_promo
     await add_promo(p_type, text, media[0] if media else None, media[1] if media else None, buttons_json)
     await state.clear()
     await message.answer("✅ Показ/Приветка успешно сохранены!", reply_markup=admin_main_kb())
 
 @admin_router.callback_query(F.data == "adm_promo_list")
 async def adm_promo_list(callback: CallbackQuery):
-    from database import get_all_shows
     shows = await get_all_shows()
     if not shows:
         await callback.answer("Показов пока нет.", show_alert=True)
@@ -618,7 +612,6 @@ async def adm_promo_list(callback: CallbackQuery):
 @admin_router.callback_query(F.data.startswith("adm_pr_del_"))
 async def adm_pr_del(callback: CallbackQuery):
     promo_id = int(callback.data.split("_")[3])
-    from database import delete_promo
     await delete_promo(promo_id)
     await callback.answer("Показ удален!")
     await adm_promos_menu(callback)
@@ -650,22 +643,20 @@ async def adm_ad_trafer(message: Message, state: FSMContext):
 @admin_router.message(AdminStates.ad_owner)
 async def adm_ad_owner(message: Message, state: FSMContext):
     data = await state.get_data()
-    from database import add_traffic_ad
     await add_traffic_ad(data['ad_name'], data['ad_trafer'], message.text.strip())
     await state.clear()
     await message.answer(f"✅ Трафер добавлен!\nСтатистика доступна по команде: /stat_{data['ad_name']}", reply_markup=admin_main_kb())
 
-# Отдельный роутер для траферов (чтобы не был админом)
+# Отдельный роутер для траферов
 traffic_router = Router()
 
 @traffic_router.message(F.text.startswith("/stat_"))
 async def traffic_stats(message: Message):
     cmd_name = message.text.split("_", 1)[1]
-    from database import get_traffic_ad, get_traffic_stats
     
     ad = await get_traffic_ad(cmd_name)
     if not ad:
-        return # Игнорируем, если нет такого трафера
+        return
         
     total, today = await get_traffic_stats(cmd_name)
     username = f"@{message.from_user.username}" if message.from_user.username else ""

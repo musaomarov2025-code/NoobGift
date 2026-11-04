@@ -1,4 +1,6 @@
 import asyncio
+import aiohttp
+import json
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
@@ -8,21 +10,20 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from main import ADMIN_ID, bot
 from database import (
     get_user, add_user, update_balance, create_withdrawal, get_setting,
-    get_next_show, get_welcome_promo
+    get_next_show, get_welcome_promo, get_services, is_task_completed,
+    add_task_completion, check_ref_reward
 )
 from keyboards import user_main_kb, earn_inline_kb, withdraw_inline_kb, task_inline_kb
 
 user_router = Router()
 
-# Временное хранилище текущего задания для юзера (в оперативке, чтобы не грузить БД лишний раз)
-user_current_task = {}
+# Хранилище активных заданий
+active_tasks = {}
 
 async def send_promo(message: Message, promo):
-    """Вспомогательная функция для отправки показов/приветки"""
     if not promo: return
     kb = None
     if promo['buttons']:
-        import json
         buttons = json.loads(promo['buttons'])
         builder = InlineKeyboardBuilder()
         for row in buttons:
@@ -39,7 +40,6 @@ async def send_promo(message: Message, promo):
         await message.answer(promo['text'], reply_markup=kb, disable_web_page_preview=True)
 
 async def show_promo_cycle(message: Message):
-    """Показывает очередь показов"""
     promo = await get_next_show()
     if promo:
         await send_promo(message, promo)
@@ -53,7 +53,7 @@ async def cmd_start(message: Message):
     if len(args) > 1 and args[1].isdigit():
         ref_by = int(args[1])
         if ref_by == user_id:
-            ref_by = 0 # Защита от самого себя
+            ref_by = 0
 
     user = await get_user(user_id)
     if not user:
@@ -67,17 +67,15 @@ async def cmd_start(message: Message):
                 except:
                     pass
     
-    # Приветка
     welcome = await get_welcome_promo()
     if welcome:
         await send_promo(message, welcome)
     
-    await asyncio.sleep(3) # Задержка 3 секунды
+    await asyncio.sleep(3)
     
-    await message.answer("💰 <b>Заработать</b>\nПолучай +5 ⭐️ за каждого приглашенного друга!\n\n📎 Твоя реферальная ссылка:\nhttps://t.me/{(await bot.get_me()).username}?start={user_id}")
-    
+    bot_info = await bot.get_me()
+    await message.answer(f"💰 <b>Заработать</b>\nПолучай +5 ⭐️ за каждого приглашенного друга!\n\n📎 Твоя реферальная ссылка:\nhttps://t.me/{bot_info.username}?start={user_id}")
     await message.answer("💡 <b>Задания</b>\nПолучай Звёзды за простые задания!")
-    
     await message.answer("Главное меню:", reply_markup=user_main_kb())
 
 @user_router.message(F.text == "Заработать")
@@ -117,31 +115,19 @@ async def process_withdraw(callback: CallbackQuery):
         await callback.answer(f"Не хватает звёзд. Баланс: {user['balance']:.2f} ⭐", show_alert=True)
         return
         
-    # Списываем баланс сразу (резервируем)
     await update_balance(callback.from_user.id, -amount)
     wd_id = await create_withdrawal(callback.from_user.id, amount)
     
     await callback.message.edit_text(f"✅ Заявка #{wd_id} на {amount} ⭐ создана.\nСрок вывода: 5 минут — 24 часа.")
     await callback.answer()
     
-    # Уведомление админу
     username = f"@{callback.from_user.username}" if callback.from_user.username else "Пользователь"
     try:
         await bot.send_message(ADMIN_ID, f"💸 <b>Новая заявка #{wd_id}!</b>\nЮзер: {username} (ID: {callback.from_user.id})\nСумма: {amount} ⭐")
     except:
         pass
-      import aiohttp
-import json
-from database import (
-    get_services, get_setting, is_task_completed, 
-    add_task_completion, check_ref_reward
-)
-
-# Хранилище активных заданий юзера {user_id: {"service": name, "task_id": id, "link": url, "reward": float}}
-active_tasks = {}
 
 async def fetch_task_from_api(service_name, api_key, user_id):
-    """Запрашивает задание у конкретного сервиса"""
     if not api_key: return None
     async with aiohttp.ClientSession() as session:
         try:
@@ -197,7 +183,6 @@ async def fetch_task_from_api(service_name, api_key, user_id):
     return None
 
 async def get_next_task(user_id):
-    """Ищет следующее доступное задание по приоритету"""
     services = await get_services()
     reward = float(await get_setting('task_reward') or 0.65)
     
@@ -206,7 +191,6 @@ async def get_next_task(user_id):
         
         task = await fetch_task_from_api(srv['name'], srv['api_key'], user_id)
         if task:
-            # Проверяем, не выполнял ли он его ранее
             if not await is_task_completed(user_id, srv['name'], task['task_id']):
                 active_tasks[user_id] = {
                     "service": srv['name'],
@@ -236,11 +220,10 @@ async def menu_tasks(message: Message):
 @user_router.callback_query(F.data == "task_skip")
 async def task_skip(callback: CallbackQuery):
     user_id = callback.from_user.id
-    active_tasks.pop(user_id, None) # Удаляем текущее
+    active_tasks.pop(user_id, None)
     await callback.answer("Задание пропущено", show_alert=True)
     await callback.message.delete()
     
-    # Выдаем следующее
     task = await get_next_task(user_id)
     if not task:
         await callback.message.answer("😴 Заданий пока нет — загляни позже.")
@@ -260,13 +243,9 @@ async def task_confirm(callback: CallbackQuery):
         await callback.answer("Задание устарело или не найдено.", show_alert=True)
         return
         
-    # Здесь должна быть проверка выполнения через API сервиса (упрощено для примера)
-    # В реальности: отправляем запрос на check endpoint сервиса с task_id.
-    # Для примера считаем, что если юзер нажал, то он подписался.
     success = True 
     
     if success:
-        # Начисляем
         await add_task_completion(user_id, task['service'], task['task_id'])
         await update_balance(user_id, task['reward'])
         await callback.message.delete()
@@ -277,7 +256,6 @@ async def task_confirm(callback: CallbackQuery):
             f"❗️ Не отписывайся от канала в течение как минимум 3 дней. В противном случае, ты получишь штраф."
         )
         
-        # Проверяем рефералку (не пора ли выдать бонус пригласившему)
         ref_by, ref_rew, ref_username = await check_ref_reward(user_id)
         if ref_by:
             r_name = f"@{ref_username}" if ref_username != "Пользователь" else "Пользователь"

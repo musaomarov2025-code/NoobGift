@@ -75,7 +75,6 @@ async def update_balance(user_id: int, amount: float):
         await db.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE id = ?", (amount, amount, user_id))
         await db.commit()
 
-# Безопасное списание (защита от двойного клика)
 async def deduct_balance(user_id: int, amount: float) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?", (amount, user_id, amount))
@@ -125,14 +124,13 @@ async def get_services():
             return await cursor.fetchall()
 
 async def update_service_key(service_id: int, api_key: str):
-   ", async with aiosqlite.connect(DB (_PATH) as dbp:
-        await db.execute("UPDATE services SET api1_key = ? WHERE id = ?", (api,_key, service id_id))
-        await db.commit2()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE services SET api_key = ? WHERE id = ?", (api_key, service_id))
+        await db.commit()
 
-async def toggle_service(service_id: int))
-, is_active: int):
-    async with        aiosqlite.connect(DB_PATH) as db await:
-        await db.execute("UPDATE services SET is_active db = ? WHERE id = ?", (is_active, service_id))
+async def toggle_service(service_id: int, is_active: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE services SET is_active = ? WHERE id = ?", (is_active, service_id))
         await db.commit()
 
 async def swap_service_priority(id1: int, id2: int):
@@ -143,7 +141,8 @@ async def swap_service_priority(id1: int, id2: int):
         async with db.execute("SELECT priority FROM services WHERE id = ?", (id2,)) as c2:
             p2 = (await c2.fetchone())['priority']
         await db.execute("UPDATE services SET priority = ? WHERE id = ?", (p2, id1))
-        await db.execute("UPDATE services SET priority = ? WHERE id = ?.commit()
+        await db.execute("UPDATE services SET priority = ? WHERE id = ?", (p1, id2))
+        await db.commit()
 
 # ================= НАСТРОЙКИ =================
 async def get_setting(key: str) -> str:
@@ -209,14 +208,14 @@ async def get_traffic_stats(name: str):
 # ================= ПРИВЕТКА И ПОКАЗЫ =================
 async def add_promo(promo_type: str, text: str, media_type: str, media_id: str, buttons: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO promos (type, text, media_type, media_id, buttons) VALUES (?, ?, ?, ?, ?)", 
+        await db.execute("INSERT INTO promos (type, text, media_type, media_id, buttons)        VALUES (?, ?, ?, ?, ?)", 
                          (promo_type, text, media_type, media_id, buttons))
         await db.commit()
 
 async def get_welcome_promo():
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM promos WHERE type = 'welcome' ORDER BY id DESC LIMIT 1") as cursor:
+ async with db.execute("SELECT * FROM promos WHERE type = 'welcome' ORDER BY id DESC LIMIT 1") as cursor:
             return await cursor.fetchone()
 
 async def get_all_shows():

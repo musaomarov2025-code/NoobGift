@@ -56,7 +56,6 @@ async def init_db():
             
         await db.commit()
 
-# ================= ЮЗЕРЫ =================
 async def get_user(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -91,7 +90,6 @@ async def set_ref_rewarded(user_id: int):
         await db.execute("UPDATE users SET ref_rewarded = 1 WHERE id = ?", (user_id,))
         await db.commit()
 
-# ================= ВЫВОДЫ =================
 async def create_withdrawal(user_id: int, amount: float):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("INSERT INTO withdrawals (user_id, amount) VALUES (?, ?)", (user_id, amount))
@@ -116,7 +114,6 @@ async def process_withdrawal(wd_id: int, status: str):
                     await db.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (wd['amount'], wd['user_id']))
         await db.commit()
 
-# ================= СЕРВИСЫ =================
 async def get_services():
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -144,7 +141,6 @@ async def swap_service_priority(id1: int, id2: int):
         await db.execute("UPDATE services SET priority = ? WHERE id = ?", (p1, id2))
         await db.commit()
 
-# ================= НАСТРОЙКИ =================
 async def get_setting(key: str) -> str:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cursor:
@@ -156,7 +152,6 @@ async def set_setting(key: str, value: str):
         await db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
         await db.commit()
 
-# ================= ЗАДАНИЯ =================
 async def is_task_completed(user_id: int, service: str, task_id: str) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT 1 FROM task_completions WHERE user_id = ? AND service = ? AND task_id = ?", (user_id, service, task_id)) as cursor:
@@ -168,7 +163,6 @@ async def add_task_completion(user_id: int, service: str, task_id: str):
         await db.execute("UPDATE users SET tasks_done = tasks_done + 1 WHERE id = ?", (user_id,))
         await db.commit()
 
-# ================= РЕФЕРАЛЫ =================
 async def check_ref_reward(user_id: int):
     needed = int(await get_setting('ref_tasks_needed') or 5)
     reward = float(await get_setting('ref_reward') or 15.0)
@@ -185,7 +179,6 @@ async def check_ref_reward(user_id: int):
             return user['ref_by'], reward, user['username']
     return None, None, None
 
-# ================= РЕКЛАМА (ТРАФЕРЫ) =================
 async def add_traffic_ad(name: str, trafer: str, owner: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("INSERT INTO traffic_ads (name, trafer, owner) VALUES (?, ?, ?)", (name, trafer, owner))
@@ -205,17 +198,15 @@ async def get_traffic_stats(name: str):
             today = (await c2.fetchone())[0]
         return total, today
 
-# ================= ПРИВЕТКА И ПОКАЗЫ =================
 async def add_promo(promo_type: str, text: str, media_type: str, media_id: str, buttons: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO promos (type, text, media_type, media_id, buttons)        VALUES (?, ?, ?, ?, ?)", 
-                         (promo_type, text, media_type, media_id, buttons))
+        await db.execute("INSERT INTO promos (type, text, media_type, media_id, buttons) VALUES (?, ?, ?, ?, ?)", (promo_type, text, media_type, media_id, buttons))
         await db.commit()
 
 async def get_welcome_promo():
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
- async with db.execute("SELECT * FROM promos WHERE type = 'welcome' ORDER BY id DESC LIMIT 1") as cursor:
+        async with db.execute("SELECT * FROM promos WHERE type = 'welcome' ORDER BY id DESC LIMIT 1") as cursor:
             return await cursor.fetchone()
 
 async def get_all_shows():
@@ -226,12 +217,15 @@ async def get_all_shows():
 
 async def get_next_show():
     shows = await get_all_shows()
-    if not shows: return None
+    if not shows: 
+        return None
     index = int(await get_setting('show_index') or 0)
-    if index >= len(shows): index = 0
+    if index >= len(shows): 
+        index = 0
     promo = shows[index]
     next_idx = index + 1
-    if next_idx >= len(shows): next_idx = 0
+    if next_idx >= len(shows): 
+        next_idx = 0
     await set_setting('show_index', str(next_idx))
     return promo
 

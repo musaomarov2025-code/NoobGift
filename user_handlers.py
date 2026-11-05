@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import json
+import time
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
@@ -18,9 +19,20 @@ from keyboards import user_main_kb, earn_inline_kb, withdraw_inline_kb, task_inl
 user_router = Router()
 
 active_tasks = {}
+api_error_cooldown = {}
+
+async def notify_admin_error(service_name, error_msg):
+    current_time = time.time()
+    if current_time - api_error_cooldown.get(service_name, 0) > 3600:
+        api_error_cooldown[service_name] = current_time
+        try:
+            await bot.send_message(ADMIN_ID, f"⚠️ <b>Ошибка API [{service_name}]</b>\n{error_msg}")
+        except:
+            pass
 
 async def send_promo(message: Message, promo):
-    if not promo: return
+    if not promo: 
+        return
     kb = None
     if promo['buttons']:
         buttons = json.loads(promo['buttons'])
@@ -104,8 +116,6 @@ async def menu_withdraw(message: Message):
 @user_router.callback_query(F.data.startswith("wd_"))
 async def process_withdraw(callback: CallbackQuery):
     amount = float(callback.data.split("_")[1])
-    
-    # Безопасное списание (защита от двойного клика)
     success = await deduct_balance(callback.from_user.id, amount)
     
     if not success:
@@ -113,31 +123,18 @@ async def process_withdraw(callback: CallbackQuery):
         return
         
     wd_id = await create_withdrawal(callback.from_user.id, amount)
-    
     await callback.message.edit_text(f"✅ Заявка #{wd_id} на {amount} ⭐ создана.\nСрок вывода: 5 минут — 24 часа.")
     await callback.answer()
     
     username = f"@{callback.from_user.username}" if callback.from_user.username else "Пользователь"
     try:
         await bot.send_message(ADMIN_ID, f"💸 <b>Новая заявка #{wd_id}!</b>\nЮзер: {username} (ID: {callback.from_user.id})\nСумма: {amount} ⭐")
-    except: pass
-        import time
-
-# Кэш для защиты от спама ошибками API (чтобы не заваливало сообщениями)
-api_error_cooldown = {}
-
-async def notify_admin_error(service_name, error_msg):
-    """Отправляет ошибку тебе в ЛС, но не чаще раза в час для каждого сервиса"""
-    current_time = time.time()
-    if current_time - api_error_cooldown.get(service_name, 0) > 3600:
-        api_error_cooldown[service_name] = current_time
-        try:
-            await bot.send_message(ADMIN_ID, f"⚠️ <b>Ошибка API [{service_name}]</b>\n{error_msg}")
-        except:
-            pass
+    except: 
+        pass
 
 async def fetch_task_from_api(service_name, api_key, user_id):
-    if not api_key: return None
+    if not api_key: 
+        return None
     async with aiohttp.ClientSession() as session:
         try:
             if service_name == "BotoHub":
@@ -207,14 +204,12 @@ async def fetch_task_from_api(service_name, api_key, user_id):
     return None
 
 async def check_task_in_api(service_name, api_key, user_id, task_id):
-    """Реальная проверка подписки через API сервиса"""
     async with aiohttp.ClientSession() as session:
         try:
             if service_name == "BotoHub":
                 async with session.get(f"https://botohub.me/api/get-tasks?user_id={user_id}&is_task=true", headers={"Auth": api_key}) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        # Если пришел НОВЫЙ таск, значит предыдущий выполнен
                         if not data.get("task") or str(data["task"]["id"]) != task_id:
                             return True
                         return False
@@ -264,7 +259,8 @@ async def get_next_task(user_id):
     reward = float(await get_setting('task_reward') or 0.65)
     
     for srv in services:
-        if not srv['is_active'] or not srv['api_key']: continue
+        if not srv['is_active'] or not srv['api_key']: 
+            continue
         
         task = await fetch_task_from_api(srv['name'], srv['api_key'], user_id)
         if task:
@@ -298,7 +294,7 @@ async def menu_tasks(message: Message):
 @user_router.callback_query(F.data == "task_skip")
 async def task_skip(callback: CallbackQuery):
     user_id = callback.from_user.id
-    active_tasks.pop(user_id, None) # Удаляем только текущее
+    active_tasks.pop(user_id, None) 
     await callback.answer("Задание пропущено", show_alert=True)
     await callback.message.delete()
     
@@ -322,8 +318,6 @@ async def task_confirm(callback: CallbackQuery):
         return
         
     await callback.answer("⏳ Проверяем подписку...", show_alert=False)
-    
-    # Реальная проверка
     success = await check_task_in_api(task['service'], task['api_key'], user_id, task['task_id'])
     
     if success:
@@ -342,7 +336,8 @@ async def task_confirm(callback: CallbackQuery):
             r_name = f"@{ref_username}" if ref_username != "Пользователь" else "Пользователь"
             try:
                 await bot.send_message(ref_by, f"⭐ Твой реферал {r_name} выполнил нужное кол-во заданий: +{ref_rew:.2f} ⭐")
-            except: pass
+            except: 
+                pass
             
         active_tasks.pop(user_id, None)
     else:

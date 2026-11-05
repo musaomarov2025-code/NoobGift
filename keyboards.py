@@ -30,8 +30,8 @@ def user_main_kb():
 def earn_inline_kb(ref_link: str):
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Скопировать ссылку", copy_text=CopyTextButton(text=ref_link)),
-            InlineKeyboardButton(text="Отправить другу", url=f"https://t.me/share/url?url={ref_link}")
+            InlineKeyboardButton(text="📋 Скопировать ссылку", copy_text=CopyTextButton(text=ref_link)),
+            InlineKeyboardButton(text="🔗 Отправить другу", url=f"https://t.me/share/url?url={ref_link}")
         ]
     ])
 

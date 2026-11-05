@@ -9,7 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from main import ADMIN_ID, bot
 from database import (
-    get_user, add_user, update_balance, create_withdrawal, get_setting,
+    get_user, add_user, update_balance, deduct_balance, create_withdrawal, get_setting,
     get_next_show, get_welcome_promo, get_services, is_task_completed,
     add_task_completion, check_ref_reward
 )
@@ -17,7 +17,6 @@ from keyboards import user_main_kb, earn_inline_kb, withdraw_inline_kb, task_inl
 
 user_router = Router()
 
-# Хранилище активных заданий
 active_tasks = {}
 
 async def send_promo(message: Message, promo):
@@ -58,14 +57,6 @@ async def cmd_start(message: Message):
     user = await get_user(user_id)
     if not user:
         await add_user(user_id, username, ref_by)
-        if ref_by:
-            ref_user = await get_user(ref_by)
-            if ref_user:
-                ref_name = f"@{username}" if message.from_user.username else "Пользователь"
-                try:
-                    await bot.send_message(ref_by, f"⚡️ {ref_name} присоединился по твоей ссылке!\n\nТы получишь {await get_setting('ref_reward')} ⭐, как только он выполнит {await get_setting('ref_tasks_needed')} заданий")
-                except:
-                    pass
     
     welcome = await get_welcome_promo()
     if welcome:
@@ -73,10 +64,13 @@ async def cmd_start(message: Message):
     
     await asyncio.sleep(3)
     
+    ref_reward = await get_setting('ref_reward')
+    task_reward = await get_setting('task_reward')
     bot_info = await bot.get_me()
-    await message.answer(f"💰 <b>Заработать</b>\nПолучай +5 ⭐️ за каждого приглашенного друга!\n\n📎 Твоя реферальная ссылка:\nhttps://t.me/{bot_info.username}?start={user_id}")
-    await message.answer("💡 <b>Задания</b>\nПолучай Звёзды за простые задания!")
-    await message.answer("Главное меню:", reply_markup=user_main_kb())
+    
+    await message.answer(f"💰 <b>Заработать</b>\nПолучай +{ref_reward} ⭐️ за каждого приглашенного друга!\n\n📎 Твоя реферальная ссылка:\nhttps://t.me/{bot_info.username}?start={user_id}")
+    
+    await message.answer(f"💡 <b>Задания</b>\nПолучай {task_reward} ⭐ за простые задания!", reply_markup=user_main_kb())
 
 @user_router.message(F.text == "Заработать")
 async def menu_earn(message: Message):
@@ -86,11 +80,12 @@ async def menu_earn(message: Message):
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
     
-    text = (f"💰 Получай +5 ⭐️ за каждого приглашенного друга!\n\n"
+    ref_reward = await get_setting('ref_reward')
+    
+    text = (f"💰 Получай +{ref_reward} ⭐️ за каждого приглашенного друга!\n\n"
             f"📎 Твоя реферальная ссылка:\n{ref_link}\n\n"
             f"🎉 Приглашай по этой ссылке своих друзей, отправляй её во все чаты и зарабатывай ⭐️!\n\n"
-            f"👥 Приглашено тобой: {user['ref_count']}\n"
-            f"⭐️ Заработано с рефералов: {user['ref_earned']:.2f}")
+            f"👥 Приглашено тобой: {user['ref_count']}")
             
     await message.answer(text, reply_markup=earn_inline_kb(ref_link))
 
@@ -109,13 +104,14 @@ async def menu_withdraw(message: Message):
 @user_router.callback_query(F.data.startswith("wd_"))
 async def process_withdraw(callback: CallbackQuery):
     amount = float(callback.data.split("_")[1])
-    user = await get_user(callback.from_user.id)
     
-    if user['balance'] < amount:
-        await callback.answer(f"Не хватает звёзд. Баланс: {user['balance']:.2f} ⭐", show_alert=True)
+    # Безопасное списание (защита от двойного клика)
+    success = await deduct_balance(callback.from_user.id, amount)
+    
+    if not success:
+        await callback.answer(f"Не хватает звёзд.", show_alert=True)
         return
         
-    await update_balance(callback.from_user.id, -amount)
     wd_id = await create_withdrawal(callback.from_user.id, amount)
     
     await callback.message.edit_text(f"✅ Заявка #{wd_id} на {amount} ⭐ создана.\nСрок вывода: 5 минут — 24 часа.")
@@ -124,8 +120,21 @@ async def process_withdraw(callback: CallbackQuery):
     username = f"@{callback.from_user.username}" if callback.from_user.username else "Пользователь"
     try:
         await bot.send_message(ADMIN_ID, f"💸 <b>Новая заявка #{wd_id}!</b>\nЮзер: {username} (ID: {callback.from_user.id})\nСумма: {amount} ⭐")
-    except:
-        pass
+    except: pass
+        import time
+
+# Кэш для защиты от спама ошибками API (чтобы не заваливало сообщениями)
+api_error_cooldown = {}
+
+async def notify_admin_error(service_name, error_msg):
+    """Отправляет ошибку тебе в ЛС, но не чаще раза в час для каждого сервиса"""
+    current_time = time.time()
+    if current_time - api_error_cooldown.get(service_name, 0) > 3600:
+        api_error_cooldown[service_name] = current_time
+        try:
+            await bot.send_message(ADMIN_ID, f"⚠️ <b>Ошибка API [{service_name}]</b>\n{error_msg}")
+        except:
+            pass
 
 async def fetch_task_from_api(service_name, api_key, user_id):
     if not api_key: return None
@@ -133,6 +142,9 @@ async def fetch_task_from_api(service_name, api_key, user_id):
         try:
             if service_name == "BotoHub":
                 async with session.get(f"https://botohub.me/api/get-tasks?user_id={user_id}&is_task=true", headers={"Auth": api_key}) as resp:
+                    if resp.status == 401:
+                        await notify_admin_error(service_name, "Неверный API-ключ или доступ запрещен.")
+                        return None
                     if resp.status == 200:
                         data = await resp.json()
                         if data.get("task"):
@@ -140,6 +152,9 @@ async def fetch_task_from_api(service_name, api_key, user_id):
             
             elif service_name == "Traffy":
                 async with session.post("https://api.traffy.ai/tasks", headers={"x-publisher-api-key": api_key}, json={"user_id": user_id}) as resp:
+                    if resp.status == 401:
+                        await notify_admin_error(service_name, "Неверный API-ключ.")
+                        return None
                     if resp.status == 200:
                         data = await resp.json()
                         if data.get("tasks"):
@@ -148,6 +163,9 @@ async def fetch_task_from_api(service_name, api_key, user_id):
                             
             elif service_name == "SubGram":
                 async with session.post("https://api.subgram.org/get-sponsors", headers={"Auth": api_key}, json={"user_id": user_id, "action": "newtask", "get_links": 1}) as resp:
+                    if resp.status in [401, 403]:
+                        await notify_admin_error(service_name, "Неверный API-ключ.")
+                        return None
                     if resp.status == 200:
                         data = await resp.json()
                         if data.get("sponsors"):
@@ -156,6 +174,9 @@ async def fetch_task_from_api(service_name, api_key, user_id):
                             
             elif service_name == "PiarFlow":
                 async with session.post("https://piarflow.com/v1/sponsors", headers={"Authorization": f"Bearer {api_key}"}, json={"user_id": user_id}) as resp:
+                    if resp.status == 401:
+                        await notify_admin_error(service_name, "Неверный API-ключ.")
+                        return None
                     if resp.status == 200:
                         data = await resp.json()
                         if data.get("sponsors"):
@@ -172,6 +193,9 @@ async def fetch_task_from_api(service_name, api_key, user_id):
                             
             elif service_name == "Tgrass":
                 async with session.post("https://tgrass.space/tasks", headers={"Auth": api_key}, json={"tg_user_id": user_id, "is_premium": False, "lang": "ru"}) as resp:
+                    if resp.status == 401:
+                        await notify_admin_error(service_name, "Неверный API-ключ.")
+                        return None
                     if resp.status == 200:
                         data = await resp.json()
                         if data.get("offers"):
@@ -179,21 +203,75 @@ async def fetch_task_from_api(service_name, api_key, user_id):
                             return {"task_id": str(o["id"]), "link": o["link"]}
                             
         except Exception as e:
-            print(f"API Error {service_name}: {e}")
+            await notify_admin_error(service_name, f"Ошибка сети или сервера: {e}")
     return None
+
+async def check_task_in_api(service_name, api_key, user_id, task_id):
+    """Реальная проверка подписки через API сервиса"""
+    async with aiohttp.ClientSession() as session:
+        try:
+            if service_name == "BotoHub":
+                async with session.get(f"https://botohub.me/api/get-tasks?user_id={user_id}&is_task=true", headers={"Auth": api_key}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # Если пришел НОВЫЙ таск, значит предыдущий выполнен
+                        if not data.get("task") or str(data["task"]["id"]) != task_id:
+                            return True
+                        return False
+
+            elif service_name == "Traffy":
+                async with session.post("https://api.traffy.ai/tasks/check", headers={"x-publisher-api-key": api_key}, json={"user_id": user_id, "assignment_ids": [task_id]}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("status") == "completed"
+                    return False
+                    
+            elif service_name == "SubGram":
+                async with session.post("https://api.subgram.org/get-sponsors", headers={"Auth": api_key}, json={"user_id": user_id, "action": "subscribe"}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("status") == "ok"
+                    return False
+                    
+            elif service_name == "PiarFlow":
+                async with session.post("https://piarflow.com/v1/sponsors/check", headers={"Authorization": f"Bearer {api_key}"}, json={"user_id": user_id, "offer_id": task_id}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("status") == "subscribed"
+                    return False
+                    
+            elif service_name == "Flyer":
+                async with session.post("https://api.flyerhubs.com/check_task", json={"key": api_key, "user_id": user_id, "signature": task_id}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("status") == "complete"
+                    return False
+                    
+            elif service_name == "Tgrass":
+                async with session.post("https://tgrass.space/check", headers={"Auth": api_key}, json={"tg_user_id": user_id, "offer_id": task_id}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("status") == "ok"
+                    return False
+
+        except Exception as e:
+            print(f"Check Error {service_name}: {e}")
+            return False
+    return False
 
 async def get_next_task(user_id):
     services = await get_services()
     reward = float(await get_setting('task_reward') or 0.65)
     
     for srv in services:
-        if not srv['is_active']: continue
+        if not srv['is_active'] or not srv['api_key']: continue
         
         task = await fetch_task_from_api(srv['name'], srv['api_key'], user_id)
         if task:
             if not await is_task_completed(user_id, srv['name'], task['task_id']):
                 active_tasks[user_id] = {
                     "service": srv['name'],
+                    "api_key": srv['api_key'],
                     "task_id": task['task_id'],
                     "link": task['link'],
                     "reward": reward
@@ -220,7 +298,7 @@ async def menu_tasks(message: Message):
 @user_router.callback_query(F.data == "task_skip")
 async def task_skip(callback: CallbackQuery):
     user_id = callback.from_user.id
-    active_tasks.pop(user_id, None)
+    active_tasks.pop(user_id, None) # Удаляем только текущее
     await callback.answer("Задание пропущено", show_alert=True)
     await callback.message.delete()
     
@@ -243,7 +321,10 @@ async def task_confirm(callback: CallbackQuery):
         await callback.answer("Задание устарело или не найдено.", show_alert=True)
         return
         
-    success = True 
+    await callback.answer("⏳ Проверяем подписку...", show_alert=False)
+    
+    # Реальная проверка
+    success = await check_task_in_api(task['service'], task['api_key'], user_id, task['task_id'])
     
     if success:
         await add_task_completion(user_id, task['service'], task['task_id'])
@@ -260,10 +341,9 @@ async def task_confirm(callback: CallbackQuery):
         if ref_by:
             r_name = f"@{ref_username}" if ref_username != "Пользователь" else "Пользователь"
             try:
-                await bot.send_message(ref_by, f"⭐ Твой реферал {r_name} выполнил 5 заданий: +{ref_rew:.2f} ⭐")
+                await bot.send_message(ref_by, f"⭐ Твой реферал {r_name} выполнил нужное кол-во заданий: +{ref_rew:.2f} ⭐")
             except: pass
             
         active_tasks.pop(user_id, None)
-        await callback.answer("Успешно!")
     else:
-        await callback.answer("❌ Задание не выполнено. Подписка не найдена или истекла.", show_alert=True)
+        await callback.answer("❌ Задание не выполнено. Вы не подписались или отписались от канала.", show_alert=True)

@@ -539,61 +539,119 @@ async def adm_promos_menu(callback: CallbackQuery):
 
 @admin_router.callback_query(F.data == "adm_promo_welcome")
 async def adm_promo_welcome(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(AdminStates.promo_text)
-    await state.update_data(promo_type='welcome')
-    await callback.message.edit_text("👋 Отправь текст приветки (HTML):", reply_markup=admin_back_kb())
+    await state.update_data(pr_type='welcome', pr_text="", pr_media=None, pr_buttons=None)
+    await callback.message.edit_text("👋 <b>Настройка приветки</b>\nВыбери, что добавить:", reply_markup=admin_promo_menu_kb())
     await callback.answer()
 
 @admin_router.callback_query(F.data == "adm_promo_add_show")
 async def adm_promo_add_show(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(pr_type='show', pr_text="", pr_media=None, pr_buttons=None)
+    await callback.message.edit_text("🖼 <b>Настройка нового показа</b>\nВыбери, что добавить:", reply_markup=admin_promo_menu_kb())
+    await callback.answer()
+
+@admin_router.callback_query(F.data == "adm_pr_menu_text")
+async def adm_pr_menu_text(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.promo_text)
-    await state.update_data(promo_type='show')
-    await callback.message.edit_text("🖼 Отправь текст нового показа (HTML):", reply_markup=admin_back_kb())
+    await callback.message.edit_text("📝 Отправь текст (HTML):", reply_markup=admin_back_kb())
     await callback.answer()
 
 @admin_router.message(AdminStates.promo_text)
-async def adm_promo_text_set(message: Message, state: FSMContext):
-    await state.update_data(promo_text=message.html_text)
-    await state.set_state(AdminStates.promo_media)
-    await message.answer("✅ Текст сохранен. Теперь отправь медиа (фото/видео) или напиши 'пропустить':")
+async def adm_pr_text_set(message: Message, state: FSMContext):
+    await state.update_data(pr_text=message.html_text)
+    await state.set_state(None)
+    await message.answer("✅ Текст сохранен!", reply_markup=admin_promo_menu_kb())
 
-@admin_router.message(AdminStates.promo_media)
-async def adm_promo_media_set(message: Message, state: FSMContext):
-    media = None
+@admin_router.callback_query(F.data == "adm_pr_menu_media")
+async def adm_pr_menu_media(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.promo_media)
+    await callback.message.edit_text("📷 Отправь фото или видео:", reply_markup=admin_back_kb())
+    await callback.answer()
+
+@admin_router.message(AdminStates.promo_media, F.photo | F.video)
+async def adm_pr_media_set(message: Message, state: FSMContext):
     if message.photo: media = ("photo", message.photo[-1].file_id)
     elif message.video: media = ("video", message.video.file_id)
-    
-    await state.update_data(promo_media=media)
+    await state.update_data(pr_media=media)
+    await state.set_state(None)
+    await message.answer("✅ Медиа сохранено!", reply_markup=admin_promo_menu_kb())
+
+@admin_router.callback_query(F.data == "adm_pr_menu_buttons")
+async def adm_pr_menu_buttons(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.promo_buttons)
-    await message.answer("✅ Медиа сохранено. Отправь кнопки (или 'пропустить'):")
+    text = ("🔗 Введи кнопки в формате:\n"
+            "<code>Текст - ссылка</code>\n"
+            "Для кнопок в один ряд: <code>Текст - ссылка && Текст - ссылка</code>\n"
+            "Для новой строки: <code>Текст - ссылка $$ Текст - ссылка</code>")
+    await callback.message.edit_text(text, reply_markup=admin_back_kb())
+    await callback.answer()
 
 @admin_router.message(AdminStates.promo_buttons)
-async def adm_promo_buttons_set(message: Message, state: FSMContext):
+async def adm_pr_buttons_set(message: Message, state: FSMContext):
+    try:
+        rows = message.text.split("$$")
+        kb_data = []
+        for row in rows:
+            btns = row.split("&&")
+            btn_row = []
+            for b in btns:
+                parts = b.split(" - ")
+                btn_row.append({"text": parts[0].strip(), "url": parts[1].strip()})
+            kb_data.append(btn_row)
+        await state.update_data(pr_buttons=kb_data)
+        await state.set_state(None)
+        await message.answer("✅ Кнопки сохранены!", reply_markup=admin_promo_menu_kb())
+    except:
+        await message.answer("❌ Ошибка формата. Пример: Погнали - https://t.me/")
+
+@admin_router.callback_query(F.data == "adm_pr_menu_preview")
+async def adm_pr_menu_preview(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    p_type = data['promo_type']
-    text = data['promo_text']
-    media = data.get('promo_media')
-    buttons_json = None
+    text = data.get('pr_text', '')
+    media = data.get('pr_media')
+    btns = data.get('pr_buttons')
     
-    if message.text.lower() != 'пропустить':
-        try:
-            rows = message.text.split("$$")
-            kb_data = []
-            for row in rows:
-                btns = row.split("&&")
-                btn_row = []
-                for b in btns:
-                    parts = b.split(" - ")
-                    btn_row.append({"text": parts[0].strip(), "url": parts[1].strip()})
-                kb_data.append(btn_row)
-            buttons_json = json.dumps(kb_data)
-        except:
-            await message.answer("❌ Ошибка кнопок. Попробуй снова.")
-            return
-            
+    kb = None
+    if btns:
+        builder = InlineKeyboardBuilder()
+        for row in btns:
+            for btn in row:
+                builder.button(text=btn['text'], url=btn['url'])
+            builder.adjust(*[len(r) for r in btns])
+        kb = builder.as_markup()
+        
+    if media:
+        if media[0] == 'photo':
+            await callback.message.answer_photo(media[1], caption=text, reply_markup=kb)
+        elif media[0] == 'video':
+            await callback.message.answer_video(media[1], caption=text, reply_markup=kb)
+    else:
+        await callback.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+    await callback.answer()
+
+@admin_router.callback_query(F.data == "adm_pr_menu_clear")
+async def adm_pr_menu_clear(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(pr_text="", pr_media=None, pr_buttons=None)
+    await callback.message.edit_text("🗑 Данные очищены. Настройте заново:", reply_markup=admin_promo_menu_kb())
+    await callback.answer()
+
+@admin_router.callback_query(F.data == "adm_pr_menu_save")
+async def adm_pr_menu_save(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    p_type = data.get('pr_type')
+    text = data.get('pr_text', '')
+    media = data.get('pr_media')
+    btns = data.get('pr_buttons')
+    
+    if not text and not media:
+        await callback.answer("❌ Добавь хотя бы текст или медиа!", show_alert=True)
+        return
+        
+    buttons_json = json.dumps(btns) if btns else None
     await add_promo(p_type, text, media[0] if media else None, media[1] if media else None, buttons_json)
     await state.clear()
-    await message.answer("✅ Показ/Приветка успешно сохранены!", reply_markup=admin_main_kb())
+    await callback.message.answer("✅ Успешно сохранено!", reply_markup=admin_main_kb())
+    await callback.message.delete()
+    await callback.answer()
 
 @admin_router.callback_query(F.data == "adm_promo_list")
 async def adm_promo_list(callback: CallbackQuery):
@@ -615,7 +673,7 @@ async def adm_pr_del(callback: CallbackQuery):
     await delete_promo(promo_id)
     await callback.answer("Показ удален!")
     await adm_promos_menu(callback)
-
+    
 # ================= РЕКЛАМА (ТРАФЕРЫ) =================
 @admin_router.callback_query(F.data == "adm_ads")
 async def adm_ads_menu(callback: CallbackQuery):

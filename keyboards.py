@@ -1,7 +1,6 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CopyTextButton
 from aiogram.fsm.state import State, StatesGroup
 
-# ================= СОСТОЯНИЯ (FSM) =================
 class AdminStates(StatesGroup):
     waiting_for_service_key = State()
     waiting_for_task_reward = State()
@@ -19,19 +18,21 @@ class AdminStates(StatesGroup):
     ad_trafer = State()
     ad_owner = State()
 
-# ================= КЛАВИАТУРЫ ЮЗЕРА =================
 def user_main_kb():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Заработать"), KeyboardButton(text="Задания")],
-            [KeyboardButton(text="Вывести")]
+            [KeyboardButton(text="⭐ Заработать"), KeyboardButton(text="💎 Задания")],
+            [KeyboardButton(text="🎁 Вывести")]
         ],
         resize_keyboard=True
     )
 
 def earn_inline_kb(ref_link: str):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Отправить ссылку друзьям", url=f"https://t.me/share/url?url={ref_link}")]
+        [
+            InlineKeyboardButton(text="Скопировать ссылку", copy_text=CopyTextButton(text=ref_link)),
+            InlineKeyboardButton(text="Отправить другу", url=f"https://t.me/share/url?url={ref_link}")
+        ]
     ])
 
 def task_inline_kb(link: str):
@@ -49,7 +50,6 @@ def withdraw_inline_kb():
         [InlineKeyboardButton(text="50 ⭐", callback_data="wd_50"), InlineKeyboardButton(text="100 ⭐", callback_data="wd_100")]
     ])
 
-# ================= КЛАВИАТУРЫ АДМИНА =================
 def admin_main_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats")],
@@ -116,10 +116,9 @@ def admin_promos_kb():
         [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
     ])
 
-# Меню настройки Приветки/Показа (как в рассылке)
 def admin_promo_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 Текст", callback_data="adm_pr_menu_text"), InlineKeyboardButton(text="📷 Медиа", callback_data="adm_pr_menu_media")],
+        [InlineKeyboardButton(text="📝 Текст", callback_data="adm_pr_menu_text"), InlineKeyboardButton(text="📷 Медиа/Стикер", callback_data="adm_pr_menu_media")],
         [InlineKeyboardButton(text="🔗 Кнопки", callback_data="adm_pr_menu_buttons")],
         [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="adm_pr_menu_preview"), InlineKeyboardButton(text="💾 Сохранить", callback_data="adm_pr_menu_save")],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data="adm_pr_menu_clear"), InlineKeyboardButton(text="◀️ Отмена", callback_data="adm_promos")]

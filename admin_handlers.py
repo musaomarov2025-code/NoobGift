@@ -318,15 +318,6 @@ async def adm_set_reftasks_val(message: Message, state: FSMContext):
     else:
         await message.answer("❌ Введите целое число.")
 
-@admin_router.message(AdminStates.waiting_for_ref_tasks)
-async def adm_set_reft Message, state: FSMContext):
-    if message.text.isdigit():
-        await set_setting('ref_tasks_needed', message.text)
-        await state.clear()
-        await message.answer("✅ Сохранено!", reply_markup=admin_main_kb())
-    else:
-        await message.answer("❌ Введите целое число.")
-
 # ================= БЭКАП =================
 @admin_router.callback_query(F.data == "adm_backup")
 async def adm_backup_menu(callback: CallbackQuery, state: FSMContext):

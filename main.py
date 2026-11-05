@@ -16,7 +16,7 @@ from keyboards import (
     BTN_EARN, BTN_TASKS, BTN_WITHDRAW,
 )
 from sponsors import (
-    get_next_task, check_task, skip_task, current, full_id,
+    get_next_task, check_task, skip_task, current, full_id, user_info,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -42,8 +42,8 @@ async def send_ref(message: Message, user_id: int):
     await message.answer(text, reply_markup=ref_kb(link))
 
 
-async def send_task(message: Message, user_id: int):
-    task = await get_next_task(user_id)
+async def send_task(message: Message, user):
+    task = await get_next_task(user_info(user))
     if not task:
         await message.answer("Заданий пока нет, загляни чуть позже ⏳")
         return
@@ -65,7 +65,7 @@ async def start(message: Message, command: CommandObject):
     await add_user(uid, message.from_user.username, ref)
     await message.answer("👋 Добро пожаловать!", reply_markup=main_kb)
     await send_ref(message, uid)
-    await send_task(message, uid)
+    await send_task(message, message.from_user)
 
 
 @dp.message(F.text == BTN_EARN)
@@ -75,7 +75,7 @@ async def earn(message: Message):
 
 @dp.message(F.text == BTN_TASKS)
 async def tasks(message: Message):
-    await send_task(message, message.from_user.id)
+    await send_task(message, message.from_user)
 
 
 @dp.callback_query(F.data == "task_skip")
@@ -83,7 +83,7 @@ async def task_skip(call: CallbackQuery):
     uid = call.from_user.id
     skip_task(uid)
     await call.message.delete()
-    await send_task(call.message, uid)
+    await send_task(call.message, call.from_user)
     await call.answer()
 
 
@@ -94,7 +94,7 @@ async def task_check(call: CallbackQuery):
     if not task:
         await call.answer("Задание устарело", show_alert=True)
         await call.message.delete()
-        await send_task(call.message, uid)
+        await send_task(call.message, call.from_user)
         return
     if not await check_task(uid, task):
         await call.answer(
@@ -117,7 +117,7 @@ async def task_check(call: CallbackQuery):
                 pass
     current.pop(uid, None)
     await call.message.delete()
-    await send_task(call.message, uid)
+    await send_task(call.message, call.from_user)
 
 
 @dp.message(F.text == BTN_WITHDRAW)

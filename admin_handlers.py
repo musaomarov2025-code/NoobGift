@@ -291,16 +291,10 @@ async def adm_set_task_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Введите награду за задание (например 0.65):", reply_markup=admin_back_kb())
     await callback.answer()
 
-@admin_router.message(AdminStates.waiting_for_task_reward)
-async def adm_set_task_val(message: Message, state: FSMContext):
-    await set_setting('task_reward', message.text.replace(",", "."))
-    await state.clear()
-    await message.answer("✅ Сохранено!", reply_markup=admin_main_kb())
-
 @admin_router.callback_query(F.data == "adm_set_ref")
 async def adm_set_ref_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_ref_reward)
-    await callback.message.edit_text("Введите награду за реasksферала:", reply_markup=admin_back_val_kb())
+    await callback.message.edit_text("Введите награду за реферала:", reply_markup=admin_back_kb())
     await callback.answer()
 
 @admin_router.message(AdminStates.waiting_for_ref_reward)
@@ -314,6 +308,15 @@ async def adm_set_reftasks_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_ref_tasks)
     await callback.message.edit_text("Сколько заданий должен выполнить реферал:", reply_markup=admin_back_kb())
     await callback.answer()
+
+@admin_router.message(AdminStates.waiting_for_ref_tasks)
+async def adm_set_reftasks_val(message: Message, state: FSMContext):
+    if message.text.isdigit():
+        await set_setting('ref_tasks_needed', message.text)
+        await state.clear()
+        await message.answer("✅ Сохранено!", reply_markup=admin_main_kb())
+    else:
+        await message.answer("❌ Введите целое число.")
 
 @admin_router.message(AdminStates.waiting_for_ref_tasks)
 async def adm_set_reft Message, state: FSMContext):

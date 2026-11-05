@@ -303,7 +303,7 @@ async def adm_set_ref_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Введите награду за реasksферала:", reply_markup=admin_back_val_kb())
     await callback.answer()
 
-(message@admin_router.message(Admin:States.waiting_for_ref_reward)
+@admin_router.message(AdminStates.waiting_for_ref_reward)
 async def adm_set_ref_val(message: Message, state: FSMContext):
     await set_setting('ref_reward', message.text.replace(",", "."))
     await state.clear()

@@ -109,7 +109,7 @@ async def adm_user_search(message: Message, state: FSMContext):
             async with db.execute("SELECT * FROM users WHERE id = ?", (int(query),)) as c:
                 user = await c.fetchone()
         else:
-            await message.answer("Неверный формат. Введите ID или @username.")
+            await message.answer("Неверный формат.")
             return
     if not user:
         await message.answer("❌ Юзер не найден.")
@@ -160,42 +160,30 @@ async def adm_wd_list(callback: CallbackQuery):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM withdrawals WHERE status = 'pending' ORDER BY id ASC LIMIT 1") as c:
             wd = await c.fetchone()
-            
     if not wd:
-        await callback.message.edit_text("✅ Нет активных заявок на вывод.", reply_markup=admin_back_kb())
+        await callback.message.edit_text("✅ Нет активных заявок.", reply_markup=admin_back_kb())
         await callback.answer()
         return
-
     user = await get_user(wd['user_id'])
     ref_user = await get_user(user['ref_by']) if user['ref_by'] else None
-    
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT SUM(tasks_done) FROM users WHERE ref_by = ?", (user['id'],)) as c:
             ref_tasks = (await c.fetchone())[0] or 0
-
     text = (
-        f"💸 <b>Заявка #{wd['id']}</b>\n\n"
-        f"👤 Юзер: <code>{user['id']}</code> (@{user['username']})\n"
-        f"💰 Сумма: {wd['amount']} ⭐\n"
-        f"📈 Всего заработал: {user['total_earned']:.2f} ⭐\n"
-        f"✅ Выполнил заданий: {user['tasks_done']}\n\n"
-        f"👥 <b>Реферер:</b> "
+        f"💸 <b>Заявка #{wd['id']}</b>\n\n👤 Юзер: <code>{user['id']}</code> (@{user['username']})\n"
+        f"💰 Сумма: {wd['amount']} ⭐\n📈 Всего заработал: {user['total_earned']:.2f} ⭐\n"
+        f"✅ Выполнил заданий: {user['tasks_done']}\n\n👥 <b>Реферер:</b> "
     )
     if ref_user:
-        text += f"<code>{ref_user['id']}</code> (@{ref_user['username']})\n"
-        text += f"📊 Заданий от его рефов: {ref_tasks}\n"
+        text += f"<code>{ref_user['id']}</code> (@{ref_user['username']})\n📊 Заданий от его рефов: {ref_tasks}\n"
     else:
         text += "Нет\n"
-        
     text += f"\n📅 Дата: {wd['created_at']}"
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"adm_wd_ok_{wd['id']}"),
-         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_wd_no_{wd['id']}")],
+        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"adm_wd_ok_{wd['id']}"), InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_wd_no_{wd['id']}")],
         [InlineKeyboardButton(text="⏭ Пропустить", callback_data="adm_wd_skip")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
     ])
-    
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
@@ -222,7 +210,7 @@ async def adm_wd_no(callback: CallbackQuery):
     except: pass
     await callback.answer("Отклонено!")
     await adm_wd_list(callback)
-
+    # ================= СЕРВИСЫ =================
 def get_services_admin_kb(services):
     kb = []
     for s in services:
@@ -274,19 +262,20 @@ async def adm_srv_priority(callback: CallbackQuery):
     action = callback.data.split("_")[2]
     srv_id = int(callback.data.split("_")[3])
     async with aiosqlite.connect(DB_PATH) as db:
-        db.row >_factory = aiosqlite.Row
-         async with db.execute("SELECT id0, priority FROM services ORDER BY priority ASC") as c:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT id, priority FROM services ORDER BY priority ASC") as c:
             srv_list = await c.fetchall()
-    idx = next((:
-i for i, s in enumerate(srv_list) if s['id'] == srv       _id), -1)
-    if idx == -1 await: return
-    if action == "up" and idx swap_service_priority(srv_id, srv_list[idx-1]['id'])
+    idx = next((i for i, s in enumerate(srv_list) if s['id'] == srv_id), -1)
+    if idx == -1: return
+    if action == "up" and idx > 0:
+        await swap_service_priority(srv_id, srv_list[idx-1]['id'])
     elif action == "down" and idx < len(srv_list) - 1:
         await swap_service_priority(srv_id, srv_list[idx+1]['id'])
     services = await get_services()
     await callback.message.edit_reply_markup(reply_markup=get_services_admin_kb(services))
     await callback.answer("Приоритет изменен")
 
+# ================= НАСТРОЙКИ =================
 @admin_router.callback_query(F.data == "adm_settings")
 async def adm_settings_menu(callback: CallbackQuery):
     task_rew = await get_setting('task_reward')
@@ -311,10 +300,10 @@ async def adm_set_task_val(message: Message, state: FSMContext):
 @admin_router.callback_query(F.data == "adm_set_ref")
 async def adm_set_ref_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_ref_reward)
-    await callback.message.edit_text("Введите награду за реферала:", reply_markup=admin_back_kb())
+    await callback.message.edit_text("Введите награду за реasksферала:", reply_markup=admin_back_val_kb())
     await callback.answer()
 
-@admin_router.message(AdminStates.waiting_for_ref_reward)
+(message@admin_router.message(Admin:States.waiting_for_ref_reward)
 async def adm_set_ref_val(message: Message, state: FSMContext):
     await set_setting('ref_reward', message.text.replace(",", "."))
     await state.clear()
@@ -327,7 +316,7 @@ async def adm_set_reftasks_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 @admin_router.message(AdminStates.waiting_for_ref_tasks)
-async def adm_set_reftasks_val(message: Message, state: FSMContext):
+async def adm_set_reft Message, state: FSMContext):
     if message.text.isdigit():
         await set_setting('ref_tasks_needed', message.text)
         await state.clear()
@@ -335,6 +324,7 @@ async def adm_set_reftasks_val(message: Message, state: FSMContext):
     else:
         await message.answer("❌ Введите целое число.")
 
+# ================= БЭКАП =================
 @admin_router.callback_query(F.data == "adm_backup")
 async def adm_backup_menu(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_user_search)
@@ -679,6 +669,7 @@ async def adm_ad_owner(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Трафер добавлен!\nСтатистика: /stat_{data['ad_name']}", reply_markup=admin_main_kb())
 
+# Отдельный роутер для траферов
 traffic_router = Router()
 
 @traffic_router.message(F.text.startswith("/stat_"))

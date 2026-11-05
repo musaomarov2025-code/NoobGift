@@ -5,7 +5,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8944743132:AAE5QUA4qMduCTmQM2FgLYJmBBlTsmaNc
 # Telegram ID админов
 ADMIN_IDS = [8742164697]
 
-DB_PATH = "/app/data/bot.db"
+DB_PATH = "/app/data/stars.db"
 
 # Значения по умолчанию (потом меняются в админке)
 DEFAULTS = {

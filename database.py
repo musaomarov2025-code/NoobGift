@@ -4,96 +4,55 @@ from main import DB_PATH
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица юзеров
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                username TEXT,
-                balance REAL DEFAULT 0.0,
-                total_earned REAL DEFAULT 0.0,
-                ref_by INTEGER DEFAULT 0,
-                ref_count INTEGER DEFAULT 0,
-                ref_earned REAL DEFAULT 0.0,
-                ref_rewarded INTEGER DEFAULT 0,
-                tasks_done INTEGER DEFAULT 0,
-                banned INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0,
+                total_earned REAL DEFAULT 0.0, ref_by INTEGER DEFAULT 0, ref_count INTEGER DEFAULT 0,
+                ref_earned REAL DEFAULT 0.0, ref_rewarded INTEGER DEFAULT 0, tasks_done INTEGER DEFAULT 0,
+                banned INTEGER DEFAULT 0, traffic_name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
-        # Таблица сервисов (BotoHub, Traffy и т.д.)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS services (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE,
-                api_key TEXT DEFAULT '',
-                is_active INTEGER DEFAULT 1,
-                priority INTEGER DEFAULT 1
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, api_key TEXT DEFAULT '',
+                is_active INTEGER DEFAULT 1, priority INTEGER DEFAULT 1
             )
         """)
-        
-        # Таблица настроек (цены и лимиты)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
+            CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)
         """)
-        
-        # Таблица заявок на вывод
         await db.execute("""
             CREATE TABLE IF NOT EXISTS withdrawals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                amount REAL,
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL,
+                status TEXT DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
-        # Таблица выполненных заданий (чтобы не начислять дважды)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS task_completions (
-                user_id INTEGER,
-                service TEXT,
-                task_id TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id INTEGER, service TEXT, task_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, service, task_id)
             )
         """)
-
-        # Таблица рефералов (кто кого привел)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS traffic_ads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE,
-                trafer TEXT,
-                owner TEXT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, trafer TEXT, owner TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # Таблица для приветки и показов
         await db.execute("""
             CREATE TABLE IF NOT EXISTS promos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT, -- 'welcome', 'show'
-                text TEXT,
-                media_type TEXT,
-                media_id TEXT,
-                buttons TEXT -- JSON
+                id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, text TEXT,
+                media_type TEXT, media_id TEXT, buttons TEXT
             )
         """)
         
-        # Стартовые настройки
-        defaults = [
-            ('task_reward', '0.65'),
-            ('ref_reward', '15.0'),
-            ('ref_tasks_needed', '5'),
-            ('show_index', '1')
-        ]
+        defaults = [('task_reward', '0.65'), ('ref_reward', '15.0'), ('ref_tasks_needed', '5'), ('show_index', '1')]
         for k, v in defaults:
             await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+            
+        default_services = [("BotoHub", 1), ("Traffy", 2), ("SubGram", 3), ("PiarFlow", 4), ("Flyer", 5), ("Tgrass", 6)]
+        for srv_name, priority in default_services:
+            await db.execute("INSERT OR IGNORE INTO services (name, priority) VALUES (?, ?)", (srv_name, priority))
             
         await db.commit()
 
@@ -115,6 +74,13 @@ async def update_balance(user_id: int, amount: float):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE id = ?", (amount, amount, user_id))
         await db.commit()
+
+# Безопасное списание (защита от двойного клика)
+async def deduct_balance(user_id: int, amount: float) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?", (amount, user_id, amount))
+        await db.commit()
+        return cursor.rowcount > 0
 
 async def set_user_banned(user_id: int, banned: int):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -142,9 +108,7 @@ async def get_withdrawal(wd_id: int):
 
 async def process_withdrawal(wd_id: int, status: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        # Обновляем статус заявки
         await db.execute("UPDATE withdrawals SET status = ? WHERE id = ?", (status, wd_id))
-        # Если отклонили - возвращаем баланс
         if status == 'rejected':
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT user_id, amount FROM withdrawals WHERE id = ?", (wd_id,)) as cursor:
@@ -152,7 +116,8 @@ async def process_withdrawal(wd_id: int, status: str):
                 if wd:
                     await db.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (wd['amount'], wd['user_id']))
         await db.commit()
-        # ================= СЕРВИСЫ =================
+
+# ================= СЕРВИСЫ =================
 async def get_services():
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -160,13 +125,14 @@ async def get_services():
             return await cursor.fetchall()
 
 async def update_service_key(service_id: int, api_key: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE services SET api_key = ? WHERE id = ?", (api_key, service_id))
-        await db.commit()
+   ", async with aiosqlite.connect(DB (_PATH) as dbp:
+        await db.execute("UPDATE services SET api1_key = ? WHERE id = ?", (api,_key, service id_id))
+        await db.commit2()
 
-async def toggle_service(service_id: int, is_active: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE services SET is_active = ? WHERE id = ?", (is_active, service_id))
+async def toggle_service(service_id: int))
+, is_active: int):
+    async with        aiosqlite.connect(DB_PATH) as db await:
+        await db.execute("UPDATE services SET is_active db = ? WHERE id = ?", (is_active, service_id))
         await db.commit()
 
 async def swap_service_priority(id1: int, id2: int):
@@ -177,8 +143,7 @@ async def swap_service_priority(id1: int, id2: int):
         async with db.execute("SELECT priority FROM services WHERE id = ?", (id2,)) as c2:
             p2 = (await c2.fetchone())['priority']
         await db.execute("UPDATE services SET priority = ? WHERE id = ?", (p2, id1))
-        await db.execute("UPDATE services SET priority = ? WHERE id = ?", (p1, id2))
-        await db.commit()
+        await db.execute("UPDATE services SET priority = ? WHERE id = ?.commit()
 
 # ================= НАСТРОЙКИ =================
 async def get_setting(key: str) -> str:
@@ -206,7 +171,6 @@ async def add_task_completion(user_id: int, service: str, task_id: str):
 
 # ================= РЕФЕРАЛЫ =================
 async def check_ref_reward(user_id: int):
-    """Проверяет, выполнил ли юзер нужное кол-во заданий, и не начислен ли бонус пригласившему."""
     needed = int(await get_setting('ref_tasks_needed') or 5)
     reward = float(await get_setting('ref_reward') or 15.0)
     
@@ -216,9 +180,7 @@ async def check_ref_reward(user_id: int):
             user = await cursor.fetchone()
             
         if user and user['ref_by'] != 0 and user['tasks_done'] >= needed and user['ref_rewarded'] == 0:
-            # Начисляем пригласившему
             await db.execute("UPDATE users SET balance = balance + ?, ref_earned = ref_earned + ? WHERE id = ?", (reward, reward, user['ref_by']))
-            # Ставим галочку, что за этого реферал заплатили
             await db.execute("UPDATE users SET ref_rewarded = 1 WHERE id = ?", (user_id,))
             await db.commit()
             return user['ref_by'], reward, user['username']
@@ -238,10 +200,8 @@ async def get_traffic_ad(name: str):
 
 async def get_traffic_stats(name: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        # Всего
         async with db.execute("SELECT COUNT(*) FROM users WHERE traffic_name = ?", (name,)) as c1:
             total = (await c1.fetchone())[0]
-        # За сегодня
         async with db.execute("SELECT COUNT(*) FROM users WHERE traffic_name = ? AND date(created_at) = date('now')", (name,)) as c2:
             today = (await c2.fetchone())[0]
         return total, today
@@ -267,17 +227,12 @@ async def get_all_shows():
 
 async def get_next_show():
     shows = await get_all_shows()
-    if not shows:
-        return None
+    if not shows: return None
     index = int(await get_setting('show_index') or 0)
-    if index >= len(shows):
-        index = 0
+    if index >= len(shows): index = 0
     promo = shows[index]
-    
-    # Сохраняем следующий индекс
     next_idx = index + 1
-    if next_idx >= len(shows):
-        next_idx = 0
+    if next_idx >= len(shows): next_idx = 0
     await set_setting('show_index', str(next_idx))
     return promo
 

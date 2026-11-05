@@ -160,30 +160,42 @@ async def adm_wd_list(callback: CallbackQuery):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM withdrawals WHERE status = 'pending' ORDER BY id ASC LIMIT 1") as c:
             wd = await c.fetchone()
+            
     if not wd:
-        await callback.message.edit_text("✅ Нет активных заявок.", reply_markup=admin_back_kb())
+        await callback.message.edit_text("✅ Нет активных заявок на вывод.", reply_markup=admin_back_kb())
         await callback.answer()
         return
+
     user = await get_user(wd['user_id'])
     ref_user = await get_user(user['ref_by']) if user['ref_by'] else None
+    
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT SUM(tasks_done) FROM users WHERE ref_by = ?", (user['id'],)) as c:
             ref_tasks = (await c.fetchone())[0] or 0
+
     text = (
-        f"💸 <b>Заявка #{wd['id']}</b>\n\n👤 Юзер: <code>{user['id']}</code> (@{user['username']})\n"
-        f"💰 Сумма: {wd['amount']} ⭐\n📈 Всего заработал: {user['total_earned']:.2f} ⭐\n"
-        f"✅ Выполнил заданий: {user['tasks_done']}\n\n👥 <b>Реферер:</b> "
+        f"💸 <b>Заявка #{wd['id']}</b>\n\n"
+        f"👤 Юзер: <code>{user['id']}</code> (@{user['username']})\n"
+        f"💰 Сумма: {wd['amount']} ⭐\n"
+        f"📈 Всего заработал: {user['total_earned']:.2f} ⭐\n"
+        f"✅ Выполнил заданий: {user['tasks_done']}\n\n"
+        f"👥 <b>Реферер:</b> "
     )
     if ref_user:
-        text += f"<code>{ref_user['id']}</code> (@{ref_user['username']})\n📊 Заданий от его рефов: {ref_tasks}\n"
+        text += f"<code>{ref_user['id']}</code> (@{ref_user['username']})\n"
+        text += f"📊 Заданий от его рефов: {ref_tasks}\n"
     else:
         text += "Нет\n"
+        
     text += f"\n📅 Дата: {wd['created_at']}"
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"adm_wd_ok_{wd['id']}"), InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_wd_no_{wd['id']}")],
+        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"adm_wd_ok_{wd['id']}"),
+         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_wd_no_{wd['id']}")],
         [InlineKeyboardButton(text="⏭ Пропустить", callback_data="adm_wd_skip")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
     ])
+    
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 

@@ -3,24 +3,18 @@ from aiogram.fsm.state import State, StatesGroup
 
 # ================= СОСТОЯНИЯ (FSM) =================
 class AdminStates(StatesGroup):
-    # Сервисы
     waiting_for_service_key = State()
-    # Настройки
     waiting_for_task_reward = State()
     waiting_for_ref_reward = State()
     waiting_for_ref_tasks = State()
-    # Юзер
     waiting_for_user_search = State()
     waiting_for_new_balance = State()
-    # Рассылка
     broadcast_text = State()
     broadcast_media = State()
     broadcast_buttons = State()
-    # Показы / Приветка
     promo_text = State()
     promo_media = State()
     promo_buttons = State()
-    # Реклама
     ad_name = State()
     ad_trafer = State()
     ad_owner = State()
@@ -51,14 +45,8 @@ def task_inline_kb(link: str):
 
 def withdraw_inline_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="15 ⭐", callback_data="wd_15"),
-            InlineKeyboardButton(text="25 ⭐", callback_data="wd_25")
-        ],
-        [
-            InlineKeyboardButton(text="50 ⭐", callback_data="wd_50"),
-            InlineKeyboardButton(text="100 ⭐", callback_data="wd_100")
-        ]
+        [InlineKeyboardButton(text="15 ⭐", callback_data="wd_15"), InlineKeyboardButton(text="25 ⭐", callback_data="wd_25")],
+        [InlineKeyboardButton(text="50 ⭐", callback_data="wd_50"), InlineKeyboardButton(text="100 ⭐", callback_data="wd_100")]
     ])
 
 # ================= КЛАВИАТУРЫ АДМИНА =================
@@ -77,18 +65,18 @@ def admin_services_kb(services):
         status = "🟢" if s['is_active'] else "🔴"
         kb.append([
             InlineKeyboardButton(text=f"{status} {s['name']}", callback_data=f"adm_srv_toggle_{s['id']}"),
-            InlineKeyboardButton(text="🔑 Ключ", callback_data=f"adm_srv_key_{s['id']}")
+            InlineKeyboardButton(text="🔑", callback_data=f"adm_srv_key_{s['id']}"),
+            InlineKeyboardButton(text="⬆️", callback_data=f"adm_srv_up_{s['id']}"),
+            InlineKeyboardButton(text="⬇️", callback_data=f"adm_srv_down_{s['id']}")
         ])
     kb.append([InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 def admin_withdraw_kb(wd_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"adm_wd_ok_{wd_id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_wd_no_{wd_id}")
-        ],
-        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="adm_wd_skip")]
+        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"adm_wd_ok_{wd_id}"), InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_wd_no_{wd_id}")],
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="adm_wd_skip")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
     ])
 
 def admin_user_kb(user_id: int, is_banned: int):
@@ -128,12 +116,13 @@ def admin_promos_kb():
         [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
     ])
 
-def admin_promo_edit_kb(promo_id: int):
+# Меню настройки Приветки/Показа (как в рассылке)
+def admin_promo_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 Текст", callback_data=f"adm_pr_text_{promo_id}"), InlineKeyboardButton(text="📷 Медиа", callback_data=f"adm_pr_media_{promo_id}")],
-        [InlineKeyboardButton(text="🔗 Кнопки", callback_data=f"adm_pr_buttons_{promo_id}")],
-        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_pr_del_{promo_id}")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_promos")]
+        [InlineKeyboardButton(text="📝 Текст", callback_data="adm_pr_menu_text"), InlineKeyboardButton(text="📷 Медиа", callback_data="adm_pr_menu_media")],
+        [InlineKeyboardButton(text="🔗 Кнопки", callback_data="adm_pr_menu_buttons")],
+        [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="adm_pr_menu_preview"), InlineKeyboardButton(text="💾 Сохранить", callback_data="adm_pr_menu_save")],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data="adm_pr_menu_clear"), InlineKeyboardButton(text="◀️ Отмена", callback_data="adm_promos")]
     ])
 
 def admin_ads_kb():

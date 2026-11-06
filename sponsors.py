@@ -262,3 +262,14 @@ def skip_task(user_id):
     task = current.pop(user_id, None)
     if task:
         skipped.setdefault(user_id, set()).add(full_id(task))
+
+
+def user_info_row(r):
+    """Данные пользователя из строки базы (для случаев без aiogram User)."""
+    return {
+        "id": r["user_id"],
+        "username": r["username"],
+        "first_name": r["first_name"] or "",
+        "lang": r["lang"] or "ru",
+        "premium": bool(r["premium"]),
+    }

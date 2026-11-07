@@ -11,20 +11,20 @@ import admin_ads
 import admin_db
 import admin_stats
 import daily
-import webapp
+import sponsors
 from ads import show_ad
-from config import ADMIN_IDS, BOT_TOKEN, WEBAPP_URL, WITHDRAW_OPTIONS, fmt
+from config import ADMIN_IDS, BOT_TOKEN, WITHDRAW_OPTIONS, fmt
 from database import (
-    add_user, check_ref_reward, count_refs, create_withdrawal,
-    finish_task, get_setting, get_user, init_db,
+    activate_withdrawal, add_user, cancel_wait, check_ref_reward,
+    count_refs, create_withdrawal, finish_task, get_setting, get_user,
+    get_withdrawal, init_db, wait_progress,
 )
 from keyboards import (
-    BTN_EARN, BTN_TASKS, BTN_WITHDRAW, check_kb, main_kb, ref_kb,
-    req_notify_kb, task_kb, withdraw_kb,
+    BTN_EARN, BTN_TASKS, BTN_WITHDRAW, main_kb, ref_kb, req_notify_kb,
+    task_kb, wd_cancel_kb, withdraw_kb,
 )
 from sponsors import (
     check_task, current, full_id, get_next_task, skip_task, user_info,
-    user_info_row,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -51,55 +51,44 @@ async def notify(uid, text):
         pass
 
 
+async def alert_admins(text):
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, text)
+        except Exception:
+            pass
+
+
 def disp(u):
     """@username или имя (для уведомлений)."""
     return escape(f"@{u.username}" if u.username else u.full_name)
 
 
-# ---------- проверка доступа и баны ----------
+# ---------- баны ----------
 
 class Gate(BaseMiddleware):
     async def __call__(self, handler, event, data):
         u = event.from_user
         if u is None or u.id in ADMIN_IDS:
             return await handler(event, data)
-        is_start = (isinstance(event, Message)
-                    and (event.text or "").startswith("/start"))
         row = await get_user(u.id)
         if row and row["banned"]:
             return
-        if is_start:
-            return await handler(event, data)
-        if not row:
-            await self._say(event, "Нажми /start")
-            return
-        if WEBAPP_URL and not row["verified"]:
-            await self._say(event, "Сначала пройди проверку: нажми /start",
-                            check=True)
+        is_start = (isinstance(event, Message)
+                    and (event.text or "").startswith("/start"))
+        if not row and not is_start:
+            if isinstance(event, CallbackQuery):
+                await event.answer("Нажми /start", show_alert=True)
+            else:
+                await event.answer("Нажми /start")
             return
         return await handler(event, data)
-
-    @staticmethod
-    async def _say(event, text, check=False):
-        if isinstance(event, CallbackQuery):
-            await event.answer(text, show_alert=True)
-        elif check:
-            await send_check(event.chat.id)
-        else:
-            await event.answer(text)
-
-
-async def send_check(chat_id):
-    await send(
-        chat_id, "<b>Для доступа к боту пройди быструю проверку</b> 👇",
-        reply_markup=check_kb())
 
 
 # ---------- сообщения ----------
 
 async def send_ref(chat_id, uid):
     reward = await get_setting("ref_reward")
-    need = await get_setting("ref_tasks_needed")
     link = f"https://t.me/{BOT_USERNAME}?start={uid}"
     invited = await count_refs(uid)
     text = (
@@ -107,8 +96,7 @@ async def send_ref(chat_id, uid):
         f"друга!</b>\n\n"
         f"📎 <i>Твоя реферальная ссылка:</i>\n{link}\n\n"
         f"🎉 <b>Приглашай по этой ссылке</b> своих друзей, отправляй её "
-        f"во все чаты и <b>зарабатывай Звёзды</b>!\n"
-        f"Награда придёт, когда друг выполнит {fmt(need)} зад.\n\n"
+        f"во все чаты и <b>зарабатывай Звёзды</b>!\n\n"
         f"<b>Приглашено тобой:</b> {invited}"
     )
     await send(chat_id, text, reply_markup=ref_kb(link))
@@ -136,11 +124,27 @@ async def welcome(chat_id, info):
     await send_task(chat_id, info)
 
 
-async def on_verified(uid):
-    """Вызывается после успешной проверки в мини-приложении."""
-    row = await get_user(uid)
-    if row:
-        await welcome(uid, user_info_row(row))
+async def announce_request(wid):
+    """Заявка создана: уведомить пользователя, админов и канал."""
+    w = await get_withdrawal(wid)
+    if not w:
+        return
+    await notify(
+        w["user_id"],
+        f"✅ Заявка #{wid} на {fmt(w['amount'])} ⭐ создана.\n"
+        "Срок вывода: 5 минут — 24 часа.")
+    text = await admin_stats.new_request_text(wid)
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id, text, reply_markup=req_notify_kb(wid))
+        except Exception:
+            pass
+    user = await get_user(w["user_id"])
+    err = await admin_stats.post_channel(
+        bot, "created", wid, w["amount"], user)
+    if err:
+        logging.warning("channel post error: %s", err)
 
 
 # ---------- обработчики ----------
@@ -162,10 +166,6 @@ async def start(message: Message, command: CommandObject):
             f"⚡️ {disp(u)} присоединился по твоей ссылке!\n\n"
             f"Ты получишь {fmt(reward)} ⭐, как только он выполнит "
             f"{fmt(need)} заданий")
-    row = await get_user(u.id)
-    if WEBAPP_URL and not row["verified"] and u.id not in ADMIN_IDS:
-        await send_check(message.chat.id)
-        return
     await welcome(message.chat.id, user_info(u))
 
 
@@ -214,14 +214,26 @@ async def task_check(call: CallbackQuery):
     if not await finish_task(uid, full_id(task), reward):
         await call.answer("Это задание уже засчитано", show_alert=True)
     else:
-        await call.answer(f"✅ +{fmt(reward)} ⭐", show_alert=True)
         paid = await check_ref_reward(uid)
+        prog = await wait_progress(uid)
+        extra = ""
+        ready = None
+        if prog:
+            if prog["done"] >= prog["need"]:
+                if await activate_withdrawal(prog["w"]["id"]):
+                    ready = prog["w"]["id"]
+            else:
+                extra = (f"\nДо вывода: {prog['done']}/{prog['need']} "
+                         "заданий")
+        await call.answer(f"✅ +{fmt(reward)} ⭐{extra}", show_alert=True)
         if paid:
             ref_id, ref_reward, need = paid
             await notify(
                 ref_id,
                 f"⭐ Твой реферал {disp(call.from_user)} выполнил "
                 f"{fmt(need)} заданий: +{ref_reward:.2f} ⭐")
+        if ready:
+            await announce_request(ready)
     current.pop(uid, None)
     try:
         await call.message.delete()
@@ -249,24 +261,44 @@ async def withdraw_confirm(call: CallbackQuery):
     if amount not in WITHDRAW_OPTIONS:
         await call.answer()
         return
-    wid = await create_withdrawal(uid, amount)
-    if not wid:
+    prog = await wait_progress(uid)
+    if prog:
+        left = max(prog["need"] - prog["done"], 0)
+        await call.answer(
+            f"У тебя уже есть вывод на {fmt(prog['w']['amount'])} ⭐. "
+            f"Выполни ещё {left} заданий.", show_alert=True)
+        return
+    need = int(float(await get_setting("withdraw_tasks") or 0))
+    res = await create_withdrawal(uid, amount, need)
+    if not res:
         await call.answer("Недостаточно звёзд", show_alert=True)
         return
+    wid, status = res
     await call.answer()
+    if status == "new":
+        await announce_request(wid)
+        return
     await send(
         call.message.chat.id,
-        f"✅ Заявка #{wid} на {amount} ⭐ создана.\n"
-        "Срок вывода: 5 минут — 24 часа.")
-    name = call.from_user.username or call.from_user.full_name
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(
-                admin_id,
-                f"💸 Новая заявка #{wid}\n{amount} ⭐ · {name} (ID {uid})",
-                reply_markup=req_notify_kb(wid))
-        except Exception:
-            pass
+        f"⏳ Чтобы вывести {amount} ⭐, выполни {need} заданий. "
+        "Как только выполнишь, заявка создастся автоматически.",
+        reply_markup=wd_cancel_kb())
+    await send_task(call.message.chat.id, user_info(call.from_user))
+
+
+@dp.callback_query(F.data == "wd_cancel")
+async def wd_cancel(call: CallbackQuery):
+    uid = call.from_user.id
+    prog = await wait_progress(uid)
+    if not prog or not await cancel_wait(prog["w"]["id"], uid):
+        await call.answer("Нечего отменять", show_alert=True)
+        return
+    await call.answer("Вывод отменён, звёзды вернулись на баланс",
+                      show_alert=True)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
 
 
 @dp.callback_query(F.data == "daily_ref")
@@ -296,8 +328,7 @@ async def main():
     await init_db()
     BOT_USERNAME = (await bot.get_me()).username
     await bot.delete_webhook(drop_pending_updates=True)
-    if WEBAPP_URL:
-        await webapp.start_server(on_verified)
+    sponsors.set_alert(alert_admins)
     background = [
         asyncio.create_task(daily.daily_loop(bot)),
         asyncio.create_task(admin_db.backup_loop(bot)),

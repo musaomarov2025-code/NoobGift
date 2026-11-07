@@ -30,12 +30,22 @@ class DailyForm(StatesGroup):
 
 # ---------- рассылка ----------
 
-async def broadcast(bot: Bot, post, markup=None):
-    """Отправляет пост всем. Возвращает (доставлено, не доставлено)."""
+async def broadcast(bot: Bot, post, markup=None, ids=None):
+    """Отправляет пост списку ids (по умолчанию всем).
+    Если в посте есть sticker, он уходит перед постом.
+    Возвращает (доставлено, не доставлено)."""
     ok = fail = 0
-    for uid in await all_user_ids():
+    sticker = post.get("sticker")
+    for uid in (ids if ids is not None else await all_user_ids()):
         for attempt in range(2):
             try:
+                if sticker:
+                    try:
+                        await bot.send_sticker(uid, sticker)
+                    except TelegramForbiddenError:
+                        raise
+                    except Exception:
+                        pass
                 await send_post(bot, uid, post, markup)
                 ok += 1
                 break

@@ -1,19 +1,20 @@
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import aiosqlite
 
-from config import DB_PATH, DEFAULTS, MSK, WEBAPP_URL
+from config import DB_PATH, DEFAULTS, MSK, WITHDRAW_OPTIONS
 
 SPONSORS = ["tgrass", "piarflow", "flyer", "trafsly", "traffy"]
+GROUPS = ("all", "new", "active", "inactive", "rich")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(
     user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT,
     balance REAL DEFAULT 0, referrer_id INTEGER,
     tasks_done INTEGER DEFAULT 0, ref_paid INTEGER DEFAULT 0,
-    created_at INTEGER DEFAULT 0, verified INTEGER DEFAULT 0,
+    created_at INTEGER DEFAULT 0, verified INTEGER DEFAULT 1,
     banned INTEGER DEFAULT 0, blocked INTEGER DEFAULT 0,
     ip_hash TEXT, fp TEXT, lang TEXT, premium INTEGER DEFAULT 0
 );
@@ -29,11 +30,16 @@ CREATE TABLE IF NOT EXISTS done_tasks(
 CREATE TABLE IF NOT EXISTS withdrawals(
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL,
     status TEXT DEFAULT 'new', created_at INTEGER DEFAULT 0,
-    processed_at INTEGER DEFAULT 0
+    processed_at INTEGER DEFAULT 0, need_tasks INTEGER DEFAULT 0,
+    base_tasks INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS ads(
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, file_id TEXT,
     text TEXT, entities TEXT, buttons TEXT, enabled INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS ad_shows(
+    ad_id INTEGER, day TEXT, n INTEGER DEFAULT 0,
+    PRIMARY KEY(ad_id, day)
 );
 """
 
@@ -41,13 +47,15 @@ CREATE TABLE IF NOT EXISTS ads(
 MIGRATE = {
     "users": {
         "first_name": "TEXT", "created_at": "INTEGER DEFAULT 0",
-        "verified": "INTEGER DEFAULT 0", "banned": "INTEGER DEFAULT 0",
+        "verified": "INTEGER DEFAULT 1", "banned": "INTEGER DEFAULT 0",
         "blocked": "INTEGER DEFAULT 0", "ip_hash": "TEXT", "fp": "TEXT",
         "lang": "TEXT", "premium": "INTEGER DEFAULT 0",
     },
     "withdrawals": {
         "created_at": "INTEGER DEFAULT 0",
         "processed_at": "INTEGER DEFAULT 0",
+        "need_tasks": "INTEGER DEFAULT 0",
+        "base_tasks": "INTEGER DEFAULT 0",
     },
     "done_tasks": {"ts": "INTEGER DEFAULT 0"},
 }
@@ -61,6 +69,10 @@ def day_start(back=0):
     """Начало дня по Москве (unix), back дней назад."""
     d = datetime.now(MSK).replace(hour=0, minute=0, second=0, microsecond=0)
     return int(d.timestamp()) - back * 86400
+
+
+def _day(back=0):
+    return (datetime.now(MSK) - timedelta(days=back)).strftime("%Y-%m-%d")
 
 
 # ---------- мелкие помощники ----------
@@ -157,17 +169,10 @@ async def add_user(user_id, username, first_name, lang, premium,
         await db.execute(
             "INSERT INTO users(user_id, username, first_name, lang, "
             "premium, referrer_id, created_at, verified) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (user_id, username, first_name, lang, premium, ref, _now(),
-             0 if WEBAPP_URL else 1))
+            "VALUES(?,?,?,?,?,?,?,1)",
+            (user_id, username, first_name, lang, premium, ref, _now()))
         await db.commit()
         return True, ref
-
-
-async def set_verified(user_id, ip_hash, fp):
-    await _exec(
-        "UPDATE users SET verified=1, ip_hash=?, fp=? WHERE user_id=?",
-        (ip_hash, fp, user_id))
 
 
 async def set_banned(user_id, flag):
@@ -191,31 +196,40 @@ async def count_refs(user_id):
         "SELECT COUNT(*) FROM users WHERE referrer_id=?", (user_id,))
 
 
-async def all_user_ids():
-    rows = await _rows(
-        "SELECT user_id FROM users WHERE banned=0 AND blocked=0")
+async def user_ids_by_group(group):
+    """Кому отправлять рассылку: all, new, active, inactive, rich."""
+    base = "SELECT user_id FROM users WHERE banned=0 AND blocked=0"
+    now = _now()
+    d3 = now - 3 * 86400
+    exists = ("EXISTS(SELECT 1 FROM done_tasks d "
+              "WHERE d.user_id=users.user_id AND d.ts>=?)")
+    if group == "new":
+        rows = await _rows(base + " AND created_at>=?", (now - 7 * 86400,))
+    elif group == "active":
+        rows = await _rows(base + " AND " + exists, (d3,))
+    elif group == "inactive":
+        rows = await _rows(
+            base + " AND created_at<? AND NOT " + exists, (d3, d3))
+    elif group == "rich":
+        rows = await _rows(
+            base + " AND balance>=?", (min(WITHDRAW_OPTIONS),))
+    else:
+        rows = await _rows(base)
     return [r["user_id"] for r in rows]
+
+
+async def all_user_ids():
+    return await user_ids_by_group("all")
 
 
 async def get_user_card(user_id):
     u = await get_user(user_id)
     if not u:
         return None
-    invited = await count_refs(user_id)
-    ref_tasks = await _val(
-        "SELECT COALESCE(SUM(tasks_done),0) FROM users "
-        "WHERE referrer_id=?", (user_id,))
-    dup_ip = dup_fp = 0
-    if u["ip_hash"]:
-        dup_ip = await _val(
-            "SELECT COUNT(*) FROM users WHERE ip_hash=? AND user_id!=?",
-            (u["ip_hash"], user_id))
-    if u["fp"]:
-        dup_fp = await _val(
-            "SELECT COUNT(*) FROM users WHERE fp=? AND user_id!=?",
-            (u["fp"], user_id))
-    return {"user": u, "invited": invited, "ref_tasks": ref_tasks,
-            "dup_ip": dup_ip, "dup_fp": dup_fp}
+    invited = await _rows(
+        "SELECT user_id, username, first_name, tasks_done, created_at "
+        "FROM users WHERE referrer_id=? ORDER BY created_at", (user_id,))
+    return {"user": u, "invited": invited}
 
 
 # ---------- задания и рефералы ----------
@@ -298,23 +312,71 @@ async def move_sponsor(name, up=True):
 
 
 # ---------- заявки на вывод ----------
+# статусы: wait (ждёт заданий), new (ждёт выплаты), paid, rejected, cancel
 
-async def create_withdrawal(user_id, amount):
-    """Списывает amount и создаёт заявку. Возвращает номер или None."""
+async def create_withdrawal(user_id, amount, need_tasks=0):
+    """Резервирует amount. Возвращает (номер, статус) или None, если
+    не хватает звёзд. Статус wait, если нужно выполнить задания."""
     async with aiosqlite.connect(DB_PATH) as db:
         c = await db.execute(
-            "SELECT balance FROM users WHERE user_id=?", (user_id,))
+            "SELECT balance, tasks_done FROM users WHERE user_id=?",
+            (user_id,))
         row = await c.fetchone()
         if not row or row[0] < amount:
             return None
+        status = "wait" if need_tasks > 0 else "new"
         await db.execute(
             "UPDATE users SET balance=balance-? WHERE user_id=?",
             (amount, user_id))
         c = await db.execute(
-            "INSERT INTO withdrawals(user_id, amount, created_at) "
-            "VALUES(?,?,?)", (user_id, amount, _now()))
+            "INSERT INTO withdrawals(user_id, amount, status, created_at, "
+            "need_tasks, base_tasks) VALUES(?,?,?,?,?,?)",
+            (user_id, amount, status, _now(), need_tasks, row[1]))
         await db.commit()
-        return c.lastrowid
+        return c.lastrowid, status
+
+
+async def wait_progress(user_id):
+    """Вывод, который ждёт заданий: {'w', 'done', 'need'} или None."""
+    w = await _row(
+        "SELECT * FROM withdrawals WHERE user_id=? AND status='wait' "
+        "ORDER BY id DESC LIMIT 1", (user_id,))
+    if not w:
+        return None
+    tasks = await _val(
+        "SELECT tasks_done FROM users WHERE user_id=?", (user_id,)) or 0
+    return {"w": dict(w), "done": max(tasks - w["base_tasks"], 0),
+            "need": w["need_tasks"]}
+
+
+async def activate_withdrawal(wid):
+    """wait -> new. True, если заявка только что создана."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        c = await db.execute(
+            "UPDATE withdrawals SET status='new', created_at=? "
+            "WHERE id=? AND status='wait'", (_now(), wid))
+        await db.commit()
+        return c.rowcount > 0
+
+
+async def cancel_wait(wid, user_id):
+    """Отмена вывода, который ждёт заданий; звёзды возвращаются."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        c = await db.execute(
+            "SELECT * FROM withdrawals WHERE id=? AND user_id=? "
+            "AND status='wait'", (wid, user_id))
+        w = await c.fetchone()
+        if not w:
+            return None
+        await db.execute(
+            "UPDATE withdrawals SET status='cancel', processed_at=? "
+            "WHERE id=?", (_now(), wid))
+        await db.execute(
+            "UPDATE users SET balance=balance+? WHERE user_id=?",
+            (w["amount"], user_id))
+        await db.commit()
+        return dict(w)
 
 
 async def get_withdrawal(wid):
@@ -324,8 +386,9 @@ async def get_withdrawal(wid):
 
 
 async def list_withdrawals(kind, limit=20):
-    """kind: 'new' (ожидают) или 'done' (обработанные)."""
-    cond = "w.status='new'" if kind == "new" else "w.status!='new'"
+    """kind: 'new' (ожидают выплаты) или 'done' (обработанные)."""
+    cond = ("w.status='new'" if kind == "new"
+            else "w.status NOT IN ('new','wait')")
     order = "ASC" if kind == "new" else "DESC"
     return await _rows(
         "SELECT w.*, u.username, u.first_name FROM withdrawals w "
@@ -358,8 +421,6 @@ async def set_withdrawal_status(wid, status):
 async def get_stats():
     s = {}
     s["users"] = await _val("SELECT COUNT(*) FROM users")
-    s["verified"] = await _val(
-        "SELECT COUNT(*) FROM users WHERE verified=1")
     s["new_today"] = await _val(
         "SELECT COUNT(*) FROM users WHERE created_at>=?", (day_start(),))
     s["new_week"] = await _val(
@@ -425,10 +486,29 @@ async def update_ad(ad_id, **fields):
 
 async def delete_ad(ad_id):
     await _exec("DELETE FROM ads WHERE id=?", (ad_id,))
+    await _exec("DELETE FROM ad_shows WHERE ad_id=?", (ad_id,))
 
 
 async def toggle_ad(ad_id):
     await _exec("UPDATE ads SET enabled=1-enabled WHERE id=?", (ad_id,))
+
+
+async def count_ad_show(ad_id):
+    await _exec(
+        "INSERT INTO ad_shows(ad_id, day, n) VALUES(?,?,1) "
+        "ON CONFLICT(ad_id, day) DO UPDATE SET n=n+1", (ad_id, _day()))
+
+
+async def ad_stats(ad_id):
+    total = await _val(
+        "SELECT COALESCE(SUM(n),0) FROM ad_shows WHERE ad_id=?", (ad_id,))
+    today = await _val(
+        "SELECT COALESCE(SUM(n),0) FROM ad_shows WHERE ad_id=? AND day=?",
+        (ad_id, _day()))
+    week = await _val(
+        "SELECT COALESCE(SUM(n),0) FROM ad_shows WHERE ad_id=? AND day>=?",
+        (ad_id, _day(6)))
+    return {"total": total, "today": today, "week": week}
 
 
 async def next_ad():

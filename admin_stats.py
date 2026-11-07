@@ -29,31 +29,61 @@ def nm(r):
         r["first_name"] or str(r["user_id"]))
 
 
-def mask(s):
-    s = s.lstrip("@")
-    return (s[:2] + "***" + s[-2:]) if len(s) > 4 else (s[:1] + "***")
+def flags(c, need):
+    """Признаки накрутки по списку приглашённых."""
+    out = []
+    inv = c["invited"]
+    n = len(inv)
+    if n >= 3:
+        good = sum(1 for r in inv if r["tasks_done"] >= need)
+        if good / n < 0.3:
+            out.append(f"⚠️ Приглашено {n}, а {need} заданий выполнили "
+                       f"только {good}")
+    times = sorted(r["created_at"] for r in inv if r["created_at"])
+    for i in range(len(times) - 4):
+        if times[i + 4] - times[i] <= 600:
+            out.append("⚠️ 5 и больше друзей зарегистрировались "
+                       "за 10 минут")
+            break
+    return out
 
 
-def card_body(c):
+def card_body(c, need):
     u = c["user"]
-    return (
-        f"👤 {nm(u)} (ID {u['user_id']})\n"
-        f"💰 Баланс: {u['balance']:.2f} ⭐\n"
-        f"📋 Заданий выполнено: {u['tasks_done']}\n"
-        f"👥 Приглашено: {c['invited']}\n"
-        f"✅ Заданий у приглашённых: {c['ref_tasks']}\n"
+    inv = c["invited"]
+    done = sum(1 for r in inv if r["tasks_done"] >= need)
+    lines = [
+        f"👤 {nm(u)} (ID {u['user_id']})",
+        f"💰 Баланс: {u['balance']:.2f} ⭐",
+        f"📋 Заданий выполнено: {u['tasks_done']}",
+        f"👥 Приглашено: {len(inv)} (выполнили {need}+ зад.: {done})",
+        f"✅ Заданий у приглашённых: "
+        f"{sum(r['tasks_done'] for r in inv)}",
         f"🔗 Пришёл по ссылке: "
-        f"{u['referrer_id'] if u['referrer_id'] else 'нет'}\n"
-        f"📅 Регистрация: {fmt_ts(u['created_at'])}\n"
-        f"🛡 Проверка: {'пройдена' if u['verified'] else 'не пройдена'}\n"
-        f"⚠️ Совпадения: по IP {c['dup_ip']}, по устройству {c['dup_fp']}\n"
-        f"🚫 Бан: {'да' if u['banned'] else 'нет'}"
-    )
+        f"{u['referrer_id'] if u['referrer_id'] else 'нет'}",
+        f"📅 Регистрация: {fmt_ts(u['created_at'])}",
+        f"🚫 Бан: {'да' if u['banned'] else 'нет'}",
+    ]
+    fl = flags(c, need)
+    if fl:
+        lines += [""] + fl
+    if inv:
+        lines += ["", "👥 Приглашённые:"]
+        for i, r in enumerate(inv[:15], 1):
+            lines.append(f"{i}. {nm(r)} · {r['tasks_done']} зад. · "
+                         f"{fmt_ts(r['created_at'])}")
+        if len(inv) > 15:
+            lines.append(f"…и ещё {len(inv) - 15}")
+    return "\n".join(lines)
+
+
+async def _need():
+    return int(float(await get_setting("ref_tasks_needed")))
 
 
 async def card_text(uid):
     c = await get_user_card(uid)
-    return card_body(c) if c else None
+    return card_body(c, await _need()) if c else None
 
 
 async def req_text(wid):
@@ -61,16 +91,60 @@ async def req_text(wid):
     if not w:
         return None, None
     c = await get_user_card(w["user_id"])
-    status = {"new": "⏳ ожидает", "paid": "✅ выплачена",
-              "rejected": "❌ отклонена"}.get(w["status"], w["status"])
+    status = {"wait": "⌛ ждёт заданий", "new": "⏳ ожидает выплаты",
+              "paid": "✅ выплачена", "rejected": "❌ отклонена",
+              "cancel": "отменена пользователем"}.get(
+                  w["status"], w["status"])
     text = (
         f"💸 Заявка #{wid}\n"
         f"Сумма: {fmt(w['amount'])} ⭐\n"
         f"Статус: {status}\n"
         f"Создана: {fmt_ts(w['created_at'])}\n\n"
-        + (card_body(c) if c else f"ID {w['user_id']}")
+        + (card_body(c, await _need()) if c else f"ID {w['user_id']}")
     )
     return text, w
+
+
+async def new_request_text(wid):
+    """Короткое сообщение админу о новой заявке (с пометками накрутки)."""
+    w = await get_withdrawal(wid)
+    c = await get_user_card(w["user_id"])
+    inv = c["invited"]
+    text = (f"💸 Новая заявка #{wid}\n"
+            f"{fmt(w['amount'])} ⭐ · {nm(w)} (ID {w['user_id']})\n"
+            f"Приглашено: {len(inv)}")
+    fl = flags(c, await _need())
+    if fl:
+        text += "\n" + "\n".join(fl)
+    return text
+
+
+async def post_channel(bot: Bot, kind, wid, amount, user_row):
+    """Пост в канал выплат. kind: created, paid, rejected.
+    Возвращает текст ошибки или None."""
+    ch = await get_setting("payout_channel")
+    if not ch:
+        return None
+    head = {
+        "created": "⌛️ Создана заявка на вывод!",
+        "paid": "✅ Отправлена выплата!",
+        "rejected": "❌ Заявка отклонена",
+    }[kind]
+    if user_row and user_row["username"]:
+        name = f"@{user_row['username']}"
+    else:
+        name = (user_row["first_name"] if user_row else None) or "—"
+    me = await bot.me()
+    text = (f"{head}\n\n"
+            f"🆔 Заявка: #{wid}\n"
+            f"👤 Пользователь: {name}\n"
+            f"⭐️ Количество: {float(amount):.2f} Звёзд\n\n"
+            f"👉 @{me.username}")
+    try:
+        await bot.send_message(ch, text)
+        return None
+    except Exception as e:
+        return str(e)
 
 
 # ---------- заявки ----------
@@ -104,22 +178,6 @@ async def rq_open(call: CallbackQuery):
     await call.answer()
 
 
-async def _post_channel(bot: Bot, call: CallbackQuery, w):
-    ch = await get_setting("payout_channel")
-    if not ch:
-        return
-    u = await get_user(w["user_id"])
-    name = mask(nm(u)) if u else "***"
-    try:
-        await bot.send_message(
-            ch,
-            f"✅ Выплата #{w['id']}\n\n"
-            f"👤 {name}\n💎 {fmt(w['amount'])} ⭐")
-    except Exception as e:
-        await call.message.answer(
-            f"Не получилось отправить в канал выплат: {e}")
-
-
 async def _process(call: CallbackQuery, bot: Bot, status):
     wid = int(call.data.split(":")[2])
     w = await set_withdrawal_status(wid, status)
@@ -135,8 +193,11 @@ async def _process(call: CallbackQuery, bot: Bot, status):
         await bot.send_message(w["user_id"], note)
     except Exception:
         pass
-    if status == "paid":
-        await _post_channel(bot, call, w)
+    user = await get_user(w["user_id"])
+    err = await post_channel(bot, status, wid, w["amount"], user)
+    if err:
+        await call.message.answer(
+            f"Не получилось отправить в канал выплат: {err}")
     text, w2 = await req_text(wid)
     await safe_edit(call, text, req_kb(wid, w2["user_id"], w2["status"]))
     await call.answer("Готово")
@@ -161,8 +222,7 @@ async def stats(call: CallbackQuery, state: FSMContext):
     by = "\n".join(f"   {n}: {c}" for n, c in s["by_sponsor"]) or "   —"
     text = (
         "📊 Статистика\n\n"
-        f"👥 Пользователи: {s['users']} "
-        f"(прошли проверку: {s['verified']})\n"
+        f"👥 Пользователи: {s['users']}\n"
         f"➕ Новых: сегодня {s['new_today']}, за 7 дней {s['new_week']}\n\n"
         f"📋 Заданий выполнено: всего {s['tasks_total']}, "
         f"сегодня {s['tasks_today']}\n"

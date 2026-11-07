@@ -2,10 +2,10 @@ from urllib.parse import quote
 
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup,
-    InlineKeyboardButton, WebAppInfo,
+    InlineKeyboardButton,
 )
 
-from config import WITHDRAW_OPTIONS, WEBAPP_URL, fmt
+from config import WITHDRAW_OPTIONS, fmt
 
 BTN_EARN = "⭐ Заработать"
 BTN_TASKS = "💎 Задания"
@@ -50,12 +50,6 @@ def task_kb(url):
 def withdraw_kb():
     btns = [b(f"{n} ⭐️", f"withdraw:{n}") for n in WITHDRAW_OPTIONS]
     return ik([btns[i:i + 2] for i in range(0, len(btns), 2)])
-
-
-def check_kb():
-    return ik([[InlineKeyboardButton(
-        text="✅ Пройти проверку",
-        web_app=WebAppInfo(url=f"{WEBAPP_URL}/verify"))]])
 
 
 def req_notify_kb(wid):
@@ -107,7 +101,8 @@ def sponsor_menu_kb(name, enabled):
 # показы и рассылка
 
 def ads_kb(ads):
-    icons = {"photo": "🖼", "video": "🎬", "animation": "🎞"}
+    icons = {"photo": "🖼", "video": "🎬", "animation": "🎞",
+             "sticker": "😀"}
     rows = []
     for a in ads:
         mark = "✅" if a["enabled"] else "❌"
@@ -138,6 +133,23 @@ def ad_delete_kb(ad_id):
 
 def ad_save_kb():
     return ik([[b("✅ Сохранить", "ad:save"), b("❌ Отмена", "adm:ads")]])
+
+
+def wd_cancel_kb():
+    return ik([[b("❌ Отменить вывод", "wd_cancel")]])
+
+
+def bc_groups_kb(counts):
+    names = [
+        ("all", "👥 Всем"),
+        ("new", "🆕 Новым (7 дней)"),
+        ("active", "🔥 Активным (3 дня)"),
+        ("inactive", "😴 Неактивным (3+ дня)"),
+        ("rich", f"💰 С балансом от {min(WITHDRAW_OPTIONS)} ⭐"),
+    ]
+    rows = [[b(f"{t} · {counts[k]}", f"bcg:{k}")] for k, t in names]
+    rows.append([b("❌ Отмена", "adm:back")])
+    return ik(rows)
 
 
 def bc_confirm_kb():

@@ -13,10 +13,11 @@ from ads import (
 from config import ADMIN_IDS
 from daily import broadcast
 from database import (
-    add_ad, all_user_ids, delete_ad, get_ad, list_ads, toggle_ad, update_ad,
+    GROUPS, ad_stats, add_ad, delete_ad, get_ad, list_ads, toggle_ad,
+    update_ad, user_ids_by_group,
 )
 from keyboards import (
-    ad_delete_kb, ad_menu_kb, ad_save_kb, ads_kb, back_kb, bc_confirm_kb,
+    ad_delete_kb, ad_menu_kb, ad_save_kb, ads_kb, back_kb, bc_groups_kb,
 )
 
 router = Router()
@@ -45,6 +46,7 @@ class AdForm(StatesGroup):
 class BcForm(StatesGroup):
     post = State()
     buttons = State()
+    sticker = State()
 
 
 # ---------- список показов ----------
@@ -117,7 +119,12 @@ async def ad_save(call: CallbackQuery, state: FSMContext):
 # ---------- просмотр и изменение ----------
 
 async def _ad_text(ad):
-    return f"Показ #{ad['id']}: {'включён' if ad['enabled'] else 'выключен'}"
+    s = await ad_stats(ad["id"])
+    return (
+        f"Показ #{ad['id']}: {'включён' if ad['enabled'] else 'выключен'}\n"
+        f"Показан: всего {s['total']}, сегодня {s['today']}, "
+        f"за 7 дней {s['week']}\n"
+        "(нажатия на ссылки Telegram боту не сообщает)")
 
 
 @router.callback_query(F.data.startswith("ad:open:"))
@@ -253,27 +260,47 @@ async def bc_buttons(message: Message, state: FSMContext, bot: Bot):
         await message.answer(f"Не получилось показать: {e}\n"
                              "Проверь ссылки в кнопках и отправь снова.")
         return
-    total = len(await all_user_ids())
-    await message.answer(f"Отправить {total} пользователям?",
-                         reply_markup=bc_confirm_kb())
+    await state.set_state(BcForm.sticker)
+    await message.answer(
+        "Добавить стикер перед постом? Отправь стикер "
+        "или «-», если не нужно.", reply_markup=back_kb("adm:back"))
 
 
-async def _run(bot: Bot, chat_id, post):
-    ok, fail = await broadcast(bot, post)
+@router.message(BcForm.sticker)
+async def bc_sticker(message: Message, state: FSMContext):
+    if message.sticker:
+        post = (await state.get_data())["post"]
+        post["sticker"] = message.sticker.file_id
+        await state.update_data(post=post)
+    elif (message.text or "").strip() != "-":
+        await message.answer("Отправь стикер или «-».")
+        return
+    counts = {}
+    for g in GROUPS:
+        counts[g] = len(await user_ids_by_group(g))
+    await message.answer("Кому отправить?", reply_markup=bc_groups_kb(counts))
+
+
+async def _run(bot: Bot, chat_id, post, ids):
+    ok, fail = await broadcast(bot, post, ids=ids)
     await bot.send_message(
         chat_id,
         f"✅ Рассылка завершена\nДоставлено: {ok}\nНе доставлено: {fail}")
 
 
-@router.callback_query(F.data == "bc:go")
+@router.callback_query(F.data.startswith("bcg:"))
 async def bc_go(call: CallbackQuery, state: FSMContext, bot: Bot):
+    group = call.data.split(":")[1]
     post = (await state.get_data()).get("post")
-    if not post:
+    if not post or group not in GROUPS:
         await call.answer("Нечего отправлять", show_alert=True)
         return
+    ids = await user_ids_by_group(group)
     await state.clear()
-    await safe_edit(call, "🚀 Рассылка запущена, пришлю итог.")
-    task = asyncio.create_task(_run(bot, call.message.chat.id, post))
+    await safe_edit(
+        call, f"🚀 Рассылка запущена ({len(ids)} получателей), "
+              "пришлю итог.")
+    task = asyncio.create_task(_run(bot, call.message.chat.id, post, ids))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
     await call.answer()

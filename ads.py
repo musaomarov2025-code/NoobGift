@@ -8,7 +8,7 @@ from aiogram.types import (
     MessageEntity,
 )
 
-from database import next_ad
+from database import count_ad_show, next_ad
 
 LINE_RE = re.compile(r"^(.+?)\s+[-—–]\s+((?:https?://|t\.me/|tg://)\S+)$")
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
@@ -56,6 +56,8 @@ def post_from_message(m):
     elif m.animation:
         kind, fid, text, ents = (
             "animation", m.animation.file_id, m.caption, m.caption_entities)
+    elif m.sticker:
+        kind, fid, text, ents = "sticker", m.sticker.file_id, "", None
     elif m.text:
         kind, fid, text, ents = "text", None, m.text, m.entities
     else:
@@ -93,6 +95,9 @@ async def send_post(bot, chat_id, post, markup=None):
         return await bot.send_animation(
             chat_id, post["file_id"], caption=text,
             caption_entities=ents, reply_markup=kb)
+    if kind == "sticker":
+        return await bot.send_sticker(
+            chat_id, post["file_id"], reply_markup=kb)
     return await bot.send_message(
         chat_id, post["text"], entities=ents, reply_markup=kb,
         link_preview_options=NO_PREVIEW)
@@ -105,6 +110,7 @@ async def show_ad(bot, chat_id):
         return
     try:
         await send_post(bot, chat_id, ad_to_post(ad))
+        await count_ad_show(ad["id"])
     except Exception as e:
         logging.warning("ad %s send error: %s", ad["id"], e)
 

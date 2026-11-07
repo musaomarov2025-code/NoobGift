@@ -9,6 +9,8 @@
     fetch_<имя>(user, api_key) -> список заданий
     check_<имя>(user_id, api_key, task) -> True, если задание выполнено
 """
+import time
+
 import aiohttp
 from database import get_sponsors, is_task_done
 
@@ -17,6 +19,32 @@ PIARFLOW_NO_TOKEN = False
 
 current = {}   # user_id -> текущее задание
 skipped = {}   # user_id -> {полные id пропущенных заданий}
+
+# слежение за сервисами: ошибки и пустые ответы подряд
+fails = {}
+empties = {}
+last_alert = {}
+alert_cb = None
+ALERT_EVERY = 6 * 3600   # не чаще раза в 6 часов на один сервис
+FAILS_LIMIT = 5
+EMPTY_LIMIT = 30
+
+
+def set_alert(cb):
+    global alert_cb
+    alert_cb = cb
+
+
+async def _alert(name, kind, text):
+    now = time.time()
+    if now - last_alert.get((name, kind), 0) < ALERT_EVERY:
+        return
+    last_alert[(name, kind)] = now
+    if alert_cb:
+        try:
+            await alert_cb(text)
+        except Exception:
+            pass
 
 DEFAULT_TEXT = "Выполни задание и нажми «Подтвердить»"
 TYPE_TEXT = {
@@ -47,6 +75,8 @@ async def _post(url, headers, payload):
     timeout = aiohttp.ClientTimeout(total=15)
     async with aiohttp.ClientSession(timeout=timeout) as s:
         async with s.post(url, json=payload, headers=headers) as r:
+            if r.status in (401, 403):
+                raise RuntimeError(f"HTTP {r.status}: ключ не принят")
             return await r.json(content_type=None)
 
 
@@ -232,7 +262,24 @@ async def get_next_task(user):
             tasks = await fetch(user, s["api_key"])
         except Exception as e:
             print(f"[{s['name']}] fetch error: {e}")
+            n = fails[s["name"]] = fails.get(s["name"], 0) + 1
+            if n >= FAILS_LIMIT:
+                await _alert(
+                    s["name"], "err",
+                    f"⚠️ {s['name']}: ошибка при запросе заданий "
+                    f"({n} раз подряд). Проверь ключ и кабинет сервиса.\n"
+                    f"Последняя ошибка: {e}")
             continue
+        fails[s["name"]] = 0
+        if tasks:
+            empties[s["name"]] = 0
+        else:
+            n = empties[s["name"]] = empties.get(s["name"], 0) + 1
+            if n >= EMPTY_LIMIT:
+                await _alert(
+                    s["name"], "empty",
+                    f"⚠️ {s['name']}: {n} запросов подряд без заданий. "
+                    "Возможно, сервис не выдаёт задания или проблема с ключом.")
         for task in tasks or []:
             tid = full_id(task)
             if tid in exclude or await is_task_done(uid, tid):

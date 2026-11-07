@@ -10,11 +10,6 @@ ADMIN_IDS = [8742164697]
 
 DB_PATH = "/app/data/stars.db"
 
-# Адрес мини-приложения проверки (https://...), задаётся в переменной
-# WEBAPP_URL на хостинге. Если пусто, проверка выключена.
-WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
-PORT = int(os.getenv("PORT", "8080"))
-
 BACKUP_HOURS = 6          # как часто бот присылает копию базы админу
 DAILY_HOUR_MSK = 16       # время ежедневного уведомления (по Москве)
 WITHDRAW_OPTIONS = [15, 20, 50, 100]
@@ -45,6 +40,7 @@ DEFAULTS = {
     "ref_reward": "2",        # награда за друга
     "ref_tasks_needed": "3",  # сколько заданий должен выполнить друг
     "payout_channel": "",     # канал выплат (@канал или ID)
+    "withdraw_tasks": "3",    # сколько заданий выполнить для вывода
     "ads_pointer": "0",
     "daily_enabled": "1",
     "daily_last": "",

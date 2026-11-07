@@ -22,6 +22,7 @@ LABELS = {
     "task_reward": "Награда за задание",
     "ref_reward": "Награда за друга",
     "ref_tasks_needed": "Заданий от друга для награды",
+    "withdraw_tasks": "Заданий для вывода",
     "payout_channel": "Канал выплат",
 }
 
@@ -94,7 +95,7 @@ async def set_value(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Нужно число, например 0.25")
         return
-    if key == "ref_tasks_needed":
+    if key in ("ref_tasks_needed", "withdraw_tasks"):
         val = int(val)
     await set_setting(key, val)
     await state.clear()

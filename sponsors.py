@@ -71,11 +71,12 @@ def user_info(u):
     }
 
 
-async def _post(url, headers, payload):
+async def _post(url, headers, payload, key_errors=(401, 403)):
+    """key_errors: HTTP-коды, которые означают неверный ключ."""
     timeout = aiohttp.ClientTimeout(total=15)
     async with aiohttp.ClientSession(timeout=timeout) as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            if r.status in (401, 403):
+            if r.status in key_errors:
                 raise RuntimeError(f"HTTP {r.status}: ключ не принят")
             return await r.json(content_type=None)
 
@@ -87,11 +88,21 @@ def _task(sponsor, tid, text, url, **extra):
 
 # ---------- Tgrass ----------
 
-async def fetch_tgrass(user, key):
-    data = await _post(
+async def _tgrass_offers(user, key):
+    return await _post(
         "https://tgrass.space/tasks", {"Auth": key},
         {"tg_user_id": user["id"], "tg_login": user["username"],
          "lang": user["lang"], "is_premium": user["premium"]})
+
+
+async def fetch_tgrass(user, key):
+    data = await _tgrass_offers(user, key)
+    if data.get("status") == "ok":
+        # человек подписан на все текущие офферы: сбрасываем время
+        # обновления и просим новые, не дожидаясь
+        await _post("https://tgrass.space/reset_offers", {"Auth": key},
+                    {"tg_user_id": user["id"]})
+        data = await _tgrass_offers(user, key)
     out = []
     for o in data.get("offers") or []:
         if o.get("subscribed"):
@@ -121,7 +132,8 @@ async def fetch_piarflow(user, key):
             "first_name": user["first_name"], "username": user["username"],
             "language_code": user["lang"], "bio": None})
     data = await _post(
-        f"{PF}/sponsors", {"Authorization": f"Bearer {key}"}, payload)
+        f"{PF}/sponsors", {"Authorization": f"Bearer {key}"}, payload,
+        key_errors=(401,))  # 403 = у этого человека заданий нет
     out = []
     for s in data.get("sponsors") or []:
         if s.get("status") == "subscribed":
@@ -133,7 +145,7 @@ async def fetch_piarflow(user, key):
 async def check_piarflow(uid, key, task):
     data = await _post(
         f"{PF}/sponsors/check", {"Authorization": f"Bearer {key}"},
-        {"user_id": uid, "links": [task["url"]]})
+        {"user_id": uid, "links": [task["url"]]}, key_errors=(401,))
     items = data.get("sponsors") or []
     return bool(items) and all(
         i.get("status") == "subscribed" for i in items)
@@ -264,11 +276,15 @@ async def get_next_task(user):
             print(f"[{s['name']}] fetch error: {e}")
             n = fails[s["name"]] = fails.get(s["name"], 0) + 1
             if n >= FAILS_LIMIT:
-                await _alert(
-                    s["name"], "err",
-                    f"⚠️ {s['name']}: ошибка при запросе заданий "
-                    f"({n} раз подряд). Проверь ключ и кабинет сервиса.\n"
-                    f"Последняя ошибка: {e}")
+                if "ключ не принят" in str(e):
+                    msg = (f"⚠️ {s['name']}: ключ не принят ({e}). "
+                           "Проверь ключ в «Спонсоры» и в кабинете "
+                           "сервиса.")
+                else:
+                    msg = (f"⚠️ {s['name']}: сервис не отвечает или "
+                           f"отвечает с ошибкой ({n} раз подряд).\n"
+                           f"Последняя ошибка: {e}")
+                await _alert(s["name"], "err", msg)
             continue
         fails[s["name"]] = 0
         if tasks:
@@ -278,8 +294,11 @@ async def get_next_task(user):
             if n >= EMPTY_LIMIT:
                 await _alert(
                     s["name"], "empty",
-                    f"⚠️ {s['name']}: {n} запросов подряд без заданий. "
-                    "Возможно, сервис не выдаёт задания или проблема с ключом.")
+                    f"⚠️ {s['name']}: {n} запросов подряд без заданий.\n"
+                    "Это не всегда поломка: люди могли выполнить всё, "
+                    "у сервиса может быть время обновления или "
+                    "ограничения по языку и стране. Если так всё время, "
+                    "проверь настройки бота в кабинете сервиса.")
         for task in tasks or []:
             tid = full_id(task)
             if tid in exclude or await is_task_done(uid, tid):

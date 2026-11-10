@@ -52,6 +52,43 @@ def withdraw_kb():
     return ik([btns[i:i + 2] for i in range(0, len(btns), 2)])
 
 
+def refund_kb(rid):
+    return ik([[b("👉 Вернуть Звезды ⭐", f"refund:{rid}")]])
+
+
+def refund_task_kb(url, rid):
+    first = []
+    if url:
+        first.append(InlineKeyboardButton(text="🔎 Перейти", url=url))
+    first.append(b("✅ Подтвердить", f"refundchk:{rid}"))
+    return ik([first])
+
+
+def sources_kb(rows):
+    out = [[b(f"{r['name']} · @{r['owner']} · {r['users']}",
+              f"src:open:{r['name']}")] for r in rows]
+    out.append([b("➕ Добавить источник", "src:new")])
+    out.append([b("⬅️ Назад", "adm:back")])
+    return ik(out)
+
+
+def source_kb(name):
+    return ik([
+        [b("🔄 Обновить", f"src:open:{name}")],
+        [b("🗑 Удалить", f"src:del:{name}")],
+        [b("⬅️ К источникам", "adm:src")],
+    ])
+
+
+def source_del_kb(name):
+    return ik([[b("🗑 Да, удалить", f"src:delok:{name}"),
+                b("Отмена", f"src:open:{name}")]])
+
+
+def stat_kb(name):
+    return ik([[b("🔄 Обновить", f"srcupd:{name}")]])
+
+
 def req_notify_kb(wid):
     return ik([[b("Открыть заявку", f"rq:open:{wid}")]])
 
@@ -64,6 +101,7 @@ def admin_kb():
         [b("📣 Показы", "adm:ads"), b("📨 Рассылка", "adm:bc")],
         [b("🎯 Ежедневное", "adm:daily"), b("💸 Заявки", "adm:reqs")],
         [b("📊 Статистика", "adm:stats"), b("💾 База данных", "adm:db")],
+        [b("📈 Источники", "adm:src")],
     ])
 
 

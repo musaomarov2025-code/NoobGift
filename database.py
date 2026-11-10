@@ -6,7 +6,8 @@ import aiosqlite
 
 from config import DB_PATH, DEFAULTS, MSK, WITHDRAW_OPTIONS
 
-SPONSORS = ["tgrass", "piarflow", "flyer", "trafsly", "traffy"]
+SPONSORS = ["tgrass", "piarflow", "flyer", "trafsly", "traffy",
+            "flowly", "botohub", "darkboost", "subgram", "axionna"]
 GROUPS = ("all", "new", "active", "inactive", "rich")
 
 SCHEMA = """
@@ -16,7 +17,8 @@ CREATE TABLE IF NOT EXISTS users(
     tasks_done INTEGER DEFAULT 0, ref_paid INTEGER DEFAULT 0,
     created_at INTEGER DEFAULT 0, verified INTEGER DEFAULT 1,
     banned INTEGER DEFAULT 0, blocked INTEGER DEFAULT 0,
-    ip_hash TEXT, fp TEXT, lang TEXT, premium INTEGER DEFAULT 0
+    ip_hash TEXT, fp TEXT, lang TEXT, premium INTEGER DEFAULT 0,
+    source TEXT, bonus INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS sponsors(
@@ -25,6 +27,8 @@ CREATE TABLE IF NOT EXISTS sponsors(
 );
 CREATE TABLE IF NOT EXISTS done_tasks(
     user_id INTEGER, task_id TEXT, ts INTEGER DEFAULT 0,
+    reward REAL DEFAULT 0, url TEXT, checked INTEGER DEFAULT 0,
+    unsub INTEGER DEFAULT 0, refunded INTEGER DEFAULT 0,
     PRIMARY KEY(user_id, task_id)
 );
 CREATE TABLE IF NOT EXISTS withdrawals(
@@ -41,6 +45,9 @@ CREATE TABLE IF NOT EXISTS ad_shows(
     ad_id INTEGER, day TEXT, n INTEGER DEFAULT 0,
     PRIMARY KEY(ad_id, day)
 );
+CREATE TABLE IF NOT EXISTS sources(
+    name TEXT PRIMARY KEY, owner TEXT, created_at INTEGER DEFAULT 0
+);
 """
 
 # Колонки, которые добавляются в старые базы
@@ -50,6 +57,7 @@ MIGRATE = {
         "verified": "INTEGER DEFAULT 1", "banned": "INTEGER DEFAULT 0",
         "blocked": "INTEGER DEFAULT 0", "ip_hash": "TEXT", "fp": "TEXT",
         "lang": "TEXT", "premium": "INTEGER DEFAULT 0",
+        "source": "TEXT", "bonus": "INTEGER DEFAULT 0",
     },
     "withdrawals": {
         "created_at": "INTEGER DEFAULT 0",
@@ -57,7 +65,11 @@ MIGRATE = {
         "need_tasks": "INTEGER DEFAULT 0",
         "base_tasks": "INTEGER DEFAULT 0",
     },
-    "done_tasks": {"ts": "INTEGER DEFAULT 0"},
+    "done_tasks": {
+        "ts": "INTEGER DEFAULT 0", "reward": "REAL DEFAULT 0",
+        "url": "TEXT", "checked": "INTEGER DEFAULT 0",
+        "unsub": "INTEGER DEFAULT 0", "refunded": "INTEGER DEFAULT 0",
+    },
 }
 
 
@@ -148,7 +160,7 @@ async def get_user_by_username(name):
 
 
 async def add_user(user_id, username, first_name, lang, premium,
-                   referrer_id=None):
+                   referrer_id=None, source=None):
     """Возвращает (создан_ли, id пригласившего или None)."""
     async with aiosqlite.connect(DB_PATH) as db:
         c = await db.execute(
@@ -168,9 +180,10 @@ async def add_user(user_id, username, first_name, lang, premium,
                 ref = referrer_id
         await db.execute(
             "INSERT INTO users(user_id, username, first_name, lang, "
-            "premium, referrer_id, created_at, verified) "
-            "VALUES(?,?,?,?,?,?,?,1)",
-            (user_id, username, first_name, lang, premium, ref, _now()))
+            "premium, referrer_id, created_at, verified, source) "
+            "VALUES(?,?,?,?,?,?,?,1,?)",
+            (user_id, username, first_name, lang, premium, ref, _now(),
+             source))
         await db.commit()
         return True, ref
 
@@ -240,12 +253,12 @@ async def is_task_done(user_id, task_id):
         (user_id, task_id)) is not None
 
 
-async def finish_task(user_id, task_id, reward):
+async def finish_task(user_id, task_id, reward, url=None):
     """Засчитать задание. False, если уже было засчитано."""
     async with aiosqlite.connect(DB_PATH) as db:
         c = await db.execute(
-            "INSERT OR IGNORE INTO done_tasks VALUES(?,?,?)",
-            (user_id, task_id, _now()))
+            "INSERT OR IGNORE INTO done_tasks(user_id, task_id, ts, reward, "
+            "url) VALUES(?,?,?,?,?)", (user_id, task_id, _now(), reward, url))
         if c.rowcount == 0:
             return False
         await db.execute(
@@ -434,6 +447,8 @@ async def get_stats():
         "SELECT substr(task_id,1,instr(task_id,':')-1) AS sp, COUNT(*) AS n "
         "FROM done_tasks GROUP BY sp ORDER BY n DESC")
     s["by_sponsor"] = [(r["sp"], r["n"]) for r in rows]
+    s["unsub"] = await _val(
+        "SELECT COUNT(*) FROM done_tasks WHERE unsub=1 AND refunded=0")
     s["paid_sum"] = await _val(
         "SELECT COALESCE(SUM(amount),0) FROM withdrawals "
         "WHERE status='paid'")
@@ -520,3 +535,117 @@ async def next_ad():
     nxt = next((a for a in ads if a["id"] > ptr), ads[0])
     await set_setting("ads_pointer", nxt["id"])
     return nxt
+
+
+# ---------- бонус за старт, отписки, возвраты ----------
+
+async def give_start_bonus(user_id, amount):
+    """Один раз на пользователя. True, если бонус выдан сейчас."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        c = await db.execute(
+            "UPDATE users SET bonus=1, balance=balance+? "
+            "WHERE user_id=? AND bonus=0", (amount, user_id))
+        await db.commit()
+        return c.rowcount > 0
+
+
+async def due_rechecks(limit=30):
+    """Задания, которым пора сделать проверку на отписку (через час)."""
+    now = _now()
+    return await _rows(
+        "SELECT rowid AS rid, user_id, task_id, reward, url FROM done_tasks "
+        "WHERE checked=0 AND reward>0 AND ts>=? AND ts<=? "
+        "ORDER BY ts LIMIT ?", (now - 48 * 3600, now - 3600, limit))
+
+
+async def mark_checked(user_id, task_id):
+    await _exec(
+        "UPDATE done_tasks SET checked=1 WHERE user_id=? AND task_id=?",
+        (user_id, task_id))
+
+
+async def apply_penalty(user_id, task_id):
+    """Отписка: списываем награду. Возвращает (rid, reward) или None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        c = await db.execute(
+            "SELECT rowid AS rid, reward FROM done_tasks "
+            "WHERE user_id=? AND task_id=? AND unsub=0", (user_id, task_id))
+        row = await c.fetchone()
+        if not row:
+            return None
+        await db.execute(
+            "UPDATE done_tasks SET unsub=1, checked=1 "
+            "WHERE user_id=? AND task_id=?", (user_id, task_id))
+        await db.execute(
+            "UPDATE users SET balance=MAX(0, balance-?) WHERE user_id=?",
+            (row["reward"], user_id))
+        await db.commit()
+        return row["rid"], row["reward"]
+
+
+async def get_done_by_rid(rid):
+    return await _row(
+        "SELECT rowid AS rid, * FROM done_tasks WHERE rowid=?", (rid,))
+
+
+async def refund_task(rid, user_id):
+    """Возврат награды за отписку (один раз). Возвращает сумму или None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        c = await db.execute(
+            "SELECT rowid AS rid, reward FROM done_tasks WHERE rowid=? "
+            "AND user_id=? AND unsub=1 AND refunded=0", (rid, user_id))
+        row = await c.fetchone()
+        if not row:
+            return None
+        await db.execute(
+            "UPDATE done_tasks SET refunded=1 WHERE rowid=?", (rid,))
+        await db.execute(
+            "UPDATE users SET balance=balance+? WHERE user_id=?",
+            (row["reward"], user_id))
+        await db.commit()
+        return row["reward"]
+
+
+# ---------- источники трафика (статистика для рекламодателей) ----------
+
+async def create_source(name, owner):
+    await _exec(
+        "INSERT OR REPLACE INTO sources(name, owner, created_at) "
+        "VALUES(?,?,?)", (name.lower(), owner.lstrip("@"), _now()))
+
+
+async def get_source(name):
+    return await _row("SELECT * FROM sources WHERE name=?", (name.lower(),))
+
+
+async def list_sources():
+    return await _rows(
+        "SELECT s.name, s.owner, "
+        "(SELECT COUNT(*) FROM users u WHERE u.source=s.name) AS users "
+        "FROM sources s ORDER BY s.created_at")
+
+
+async def delete_source(name):
+    await _exec("DELETE FROM sources WHERE name=?", (name.lower(),))
+
+
+async def source_stats(name):
+    n = name.lower()
+    s = {}
+    s["users"] = await _val(
+        "SELECT COUNT(*) FROM users WHERE source=?", (n,))
+    s["new_today"] = await _val(
+        "SELECT COUNT(*) FROM users WHERE source=? AND created_at>=?",
+        (n, day_start()))
+    s["new_week"] = await _val(
+        "SELECT COUNT(*) FROM users WHERE source=? AND created_at>=?",
+        (n, day_start(6)))
+    base = ("SELECT COUNT(*) FROM done_tasks d JOIN users u "
+            "ON u.user_id=d.user_id WHERE u.source=?")
+    s["tasks_total"] = await _val(base, (n,))
+    s["tasks_today"] = await _val(base + " AND d.ts>=?", (n, day_start()))
+    s["unsub"] = await _val(
+        base + " AND d.unsub=1 AND d.refunded=0", (n,))
+    return s

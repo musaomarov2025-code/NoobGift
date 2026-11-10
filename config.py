@@ -5,10 +5,19 @@ from datetime import datetime, timedelta, timezone
 # Токен берётся из переменной BOT_TOKEN в настройках хостинга
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
-# Telegram ID админов (без кавычек)
-ADMIN_IDS = [8742164697]
+# Telegram ID админов. Можно задать переменной ADMIN_IDS (через запятую).
+def _admin_ids():
+    raw = os.getenv("ADMIN_IDS", "")
+    ids = [int(x) for x in raw.replace(" ", "").split(",")
+           if x.lstrip("-").isdigit()]
+    return ids or [8742164697]
 
-DB_PATH = "/app/data/stars.db"
+
+ADMIN_IDS = _admin_ids()
+
+# Имя файла базы. У каждого бота должно быть своё: переменная DB_NAME.
+DB_NAME = os.getenv("DB_NAME", "stars.db")
+DB_PATH = f"/app/data/{DB_NAME}"
 
 BACKUP_HOURS = 6          # как часто бот присылает копию базы админу
 DAILY_HOUR_MSK = 16       # время ежедневного уведомления (по Москве)
@@ -28,6 +37,26 @@ def fmt_ts(ts):
     return datetime.fromtimestamp(ts, MSK).strftime("%d.%m.%Y %H:%M")
 
 
+def fmt1(x):
+    """2 -> '2.0', 0.25 -> '0.25'"""
+    x = float(x)
+    return f"{x:.1f}" if x == int(x) else f"{x:g}"
+
+
+def fmt_bal(x):
+    """2.0 -> '2', 2.25 -> '2.25', 2.5 -> '2.5'"""
+    return f"{float(x):.2f}".rstrip("0").rstrip(".") or "0"
+
+
+def plural(n, one, few, many):
+    """plural(3, 'задание', 'задания', 'заданий')"""
+    n = abs(int(n))
+    if 11 <= n % 100 <= 14:
+        return many
+    r = n % 10
+    return one if r == 1 else few if 2 <= r <= 4 else many
+
+
 _DAILY_HEAD = "🎯 Звезды готовы к получению!"
 _DAILY_BOLD = [{
     "type": "bold", "offset": 0,
@@ -41,6 +70,7 @@ DEFAULTS = {
     "ref_tasks_needed": "3",  # сколько заданий должен выполнить друг
     "payout_channel": "",     # канал выплат (@канал или ID)
     "withdraw_tasks": "3",    # сколько заданий выполнить для вывода
+    "start_bonus": "2",       # звёзд за запуск бота (один раз)
     "ads_pointer": "0",
     "daily_enabled": "1",
     "daily_last": "",

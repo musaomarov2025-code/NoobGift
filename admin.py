@@ -23,6 +23,7 @@ LABELS = {
     "ref_reward": "Награда за друга",
     "ref_tasks_needed": "Заданий от друга для награды",
     "withdraw_tasks": "Заданий для вывода",
+    "start_bonus": "Бонус за запуск бота",
     "payout_channel": "Канал выплат",
 }
 

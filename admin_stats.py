@@ -226,6 +226,7 @@ async def stats(call: CallbackQuery, state: FSMContext):
         f"➕ Новых: сегодня {s['new_today']}, за 7 дней {s['new_week']}\n\n"
         f"📋 Заданий выполнено: всего {s['tasks_total']}, "
         f"сегодня {s['tasks_today']}\n"
+        f"❌ Отписалось (списано): {s['unsub']}\n"
         f"🤝 По спонсорам:\n{by}\n\n"
         f"💰 Общий баланс пользователей: {s['balance']:.2f} ⭐\n"
         f"💸 Выплачено: {fmt(s['paid_sum'])} ⭐ ({s['paid_count']} зак.)\n"

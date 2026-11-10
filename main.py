@@ -11,18 +11,24 @@ import admin_ads
 import admin_db
 import admin_stats
 import daily
+import sources
 import sponsors
-from ads import show_ad
-from config import ADMIN_IDS, BOT_TOKEN, WITHDRAW_OPTIONS, fmt
+from ads import axionna_view, show_ad
+from config import (
+    ADMIN_IDS, BOT_TOKEN, WITHDRAW_OPTIONS, fmt, fmt1, fmt_bal, plural,
+)
 from database import (
-    activate_withdrawal, add_user, cancel_wait, check_ref_reward,
-    count_refs, create_withdrawal, finish_task, get_setting, get_user,
-    get_withdrawal, init_db, wait_progress,
+    activate_withdrawal, add_user, apply_penalty, cancel_wait,
+    check_ref_reward, count_refs, create_withdrawal, due_rechecks,
+    finish_task, get_done_by_rid, get_setting, get_source, get_user,
+    get_withdrawal, give_start_bonus, init_db, mark_checked, refund_task,
+    wait_progress,
 )
 from keyboards import (
-    BTN_EARN, BTN_TASKS, BTN_WITHDRAW, main_kb, ref_kb, req_notify_kb,
-    task_kb, wd_cancel_kb, withdraw_kb,
+    BTN_EARN, BTN_TASKS, BTN_WITHDRAW, main_kb, ref_kb, refund_kb,
+    refund_task_kb, req_notify_kb, task_kb, wd_cancel_kb, withdraw_kb,
 )
+from sources import NAME_RE
 from sponsors import (
     check_task, current, full_id, get_next_task, skip_task, user_info,
 )
@@ -44,9 +50,9 @@ async def send(chat_id, text, **kw):
         link_preview_options=NO_PREVIEW, **kw)
 
 
-async def notify(uid, text):
+async def notify(uid, text, **kw):
     try:
-        await send(uid, text)
+        await send(uid, text, **kw)
     except Exception:
         pass
 
@@ -59,9 +65,11 @@ async def alert_admins(text):
             pass
 
 
-def disp(u):
-    """@username или имя (для уведомлений)."""
-    return escape(f"@{u.username}" if u.username else u.full_name)
+def mention(u):
+    """@username, а без него имя со ссылкой (для HTML-сообщений)."""
+    if u.username:
+        return f"@{escape(u.username)}"
+    return f'<a href="tg://user?id={u.id}">{escape(u.full_name)}</a>'
 
 
 # ---------- баны ----------
@@ -118,8 +126,10 @@ async def send_task(chat_id, info, with_ad=False):
         await show_ad(bot, chat_id)
 
 
-async def welcome(chat_id, info):
+async def welcome(chat_id, info, bonus_text=None):
     await send(chat_id, "⭐️", reply_markup=main_kb)
+    if bonus_text:
+        await send(chat_id, bonus_text)
     await send_ref(chat_id, info["id"])
     await send_task(chat_id, info)
 
@@ -152,21 +162,36 @@ async def announce_request(wid):
 @dp.message(CommandStart())
 async def start(message: Message, command: CommandObject):
     u = message.from_user
-    ref = None
-    if command.args and command.args.isdigit():
-        ref = int(command.args)
+    ref = source = None
+    arg = (command.args or "").strip()
+    if arg.isdigit():
+        ref = int(arg)
+    elif arg and NAME_RE.match(arg):
+        src = await get_source(arg)
+        if src:
+            source = src["name"]
     created, ref_id = await add_user(
         u.id, u.username, u.first_name, u.language_code or "ru",
-        int(bool(u.is_premium)), ref)
+        int(bool(u.is_premium)), ref, source)
     if created and ref_id:
-        reward = await get_setting("ref_reward")
-        need = await get_setting("ref_tasks_needed")
+        reward = float(await get_setting("ref_reward"))
+        need = int(float(await get_setting("ref_tasks_needed")))
         await notify(
             ref_id,
-            f"⚡️ {disp(u)} присоединился по твоей ссылке!\n\n"
-            f"Ты получишь {fmt(reward)} ⭐, как только он выполнит "
-            f"{fmt(need)} заданий")
-    await welcome(message.chat.id, user_info(u))
+            f"<b>⚡️ Пользователь {mention(u)} присоединился по твоей "
+            f"ссылке!</b>\n\n"
+            f"Ты получишь {fmt1(reward)}⭐️ как только он выполнит "
+            f"{need} {plural(need, 'задание', 'задания', 'заданий')}")
+    bonus_text = None
+    if created:
+        amount = float(await get_setting("start_bonus") or 0)
+        if amount > 0 and await give_start_bonus(u.id, amount):
+            word = (plural(amount, "Звезду", "Звезды", "Звёзд")
+                    if amount == int(amount) else "Звезды")
+            bonus_text = (f"⭐️ Вы получили {fmt(amount)} {word} "
+                          "за запуск бота!")
+    await welcome(message.chat.id, user_info(u), bonus_text)
+    await axionna_view(message.chat.id, greeting=True)
 
 
 @dp.message(F.text == BTN_EARN)
@@ -183,7 +208,7 @@ async def tasks(message: Message):
 
 @dp.callback_query(F.data == "task_skip")
 async def task_skip(call: CallbackQuery):
-    skip_task(call.from_user.id)
+    await skip_task(call.from_user.id)
     await call.answer()
     try:
         await call.message.delete()
@@ -211,9 +236,10 @@ async def task_check(call: CallbackQuery):
             show_alert=True)
         return
     reward = float(await get_setting("task_reward"))
-    if not await finish_task(uid, full_id(task), reward):
+    if not await finish_task(uid, full_id(task), reward, task.get("url")):
         await call.answer("Это задание уже засчитано", show_alert=True)
     else:
+        await call.answer()
         paid = await check_ref_reward(uid)
         prog = await wait_progress(uid)
         extra = ""
@@ -223,15 +249,21 @@ async def task_check(call: CallbackQuery):
                 if await activate_withdrawal(prog["w"]["id"]):
                     ready = prog["w"]["id"]
             else:
-                extra = (f"\nДо вывода: {prog['done']}/{prog['need']} "
-                         "заданий")
-        await call.answer(f"✅ +{fmt(reward)} ⭐{extra}", show_alert=True)
+                extra = (f"\n\n⏳ До заявки на вывод: "
+                         f"{prog['done']}/{prog['need']}")
+        await send(
+            chat_id,
+            "<b>✅ Задание выполнено!</b>\n\n"
+            f"Получено: +{fmt(reward)}⭐️\n\n"
+            "❗️Не отписывайся от канала в течение как минимум 7 дней. "
+            "В противном случае, ты получишь штраф или блокировку "
+            "аккаунта." + extra)
         if paid:
-            ref_id, ref_reward, need = paid
+            ref_id, ref_reward, _need = paid
             await notify(
                 ref_id,
-                f"⭐ Твой реферал {disp(call.from_user)} выполнил "
-                f"{fmt(need)} заданий: +{ref_reward:.2f} ⭐")
+                f"<b>+{fmt1(ref_reward)} ⭐️ Начисление за приглашенного "
+                f"пользователя {mention(call.from_user)}.</b>")
         if ready:
             await announce_request(ready)
     current.pop(uid, None)
@@ -242,15 +274,101 @@ async def task_check(call: CallbackQuery):
     await send_task(chat_id, user_info(call.from_user))
 
 
+# ---------- отписки и возврат звёзд ----------
+
+async def penalty_loop():
+    """Раз в пару минут проверяет задания, выполненные час назад."""
+    while True:
+        await asyncio.sleep(120)
+        try:
+            for row in await due_rechecks(30):
+                uid, tid = row["user_id"], row["task_id"]
+                try:
+                    res = await sponsors.recheck(uid, tid, row["url"])
+                except Exception as e:
+                    logging.warning("recheck %s error: %s", tid, e)
+                    continue
+                if res is False:
+                    done = await apply_penalty(uid, tid)
+                    if done:
+                        rid, reward = done
+                        await notify(
+                            uid,
+                            "<b>😡 Мы заметили, что ты отписался от "
+                            "канала</b>\n\n"
+                            f"За это мы списали с твоего баланса "
+                            f"-{fmt(reward)} ⭐️",
+                            reply_markup=refund_kb(rid))
+                else:
+                    await mark_checked(uid, tid)
+                await asyncio.sleep(0.3)
+        except Exception:
+            logging.exception("penalty loop error")
+
+
+async def _refund_row(call: CallbackQuery, rid):
+    row = await get_done_by_rid(rid)
+    if (not row or row["user_id"] != call.from_user.id
+            or not row["unsub"] or row["refunded"]):
+        await call.answer("Звёзды уже возвращены или недоступны",
+                          show_alert=True)
+        return None
+    return row
+
+
+@dp.callback_query(F.data.startswith("refund:"))
+async def refund_start(call: CallbackQuery):
+    rid = int(call.data.split(":")[1])
+    row = await _refund_row(call, rid)
+    if not row:
+        return
+    await call.answer()
+    await send(call.message.chat.id,
+               "<b>Подпишись снова и нажми «Подтвердить»</b>",
+               reply_markup=refund_task_kb(row["url"], rid))
+
+
+@dp.callback_query(F.data.startswith("refundchk:"))
+async def refund_check(call: CallbackQuery):
+    uid = call.from_user.id
+    rid = int(call.data.split(":")[1])
+    row = await _refund_row(call, rid)
+    if not row:
+        return
+    try:
+        ok = await sponsors.recheck(uid, row["task_id"], row["url"])
+    except Exception as e:
+        logging.warning("refund recheck error: %s", e)
+        ok = None
+    if ok is not True:
+        await call.answer("❌ Подписка не найдена. Подпишись и нажми "
+                          "ещё раз.", show_alert=True)
+        return
+    reward = await refund_task(rid, uid)
+    if not reward:
+        await call.answer("Звёзды уже возвращены", show_alert=True)
+        return
+    await call.answer()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await send(call.message.chat.id,
+               f"✅ Звёзды возвращены: +{fmt(reward)} ⭐️")
+
+
+# ---------- вывод ----------
+
 @dp.message(F.text == BTN_WITHDRAW)
 async def withdraw(message: Message):
     row = await get_user(message.from_user.id)
     bal = row["balance"] if row else 0
-    await send(
-        message.chat.id,
-        f"<b>Ваш баланс:</b> {bal:.2f} ⭐️\n\n"
-        "Выберите сколько хотите вывести.",
-        reply_markup=withdraw_kb())
+    text = (f"<b>Заработано:</b> {fmt_bal(bal)} ⭐️\n\n"
+            "<b>Выбери сумму для вывода</b>")
+    ch = (await get_setting("payout_channel") or "").strip()
+    if ch and not ch.lstrip("-").isdigit():
+        text += f"\n\nКанал с выводами: {escape(ch if ch.startswith('@') else '@' + ch)}"
+    await send(message.chat.id, text, reply_markup=withdraw_kb())
     await show_ad(bot, message.chat.id)
 
 
@@ -266,7 +384,9 @@ async def withdraw_confirm(call: CallbackQuery):
         left = max(prog["need"] - prog["done"], 0)
         await call.answer(
             f"У тебя уже есть вывод на {fmt(prog['w']['amount'])} ⭐. "
-            f"Выполни ещё {left} заданий.", show_alert=True)
+            f"Выполни ещё {left} "
+            f"{plural(left, 'задание', 'задания', 'заданий')}.",
+            show_alert=True)
         return
     need = int(float(await get_setting("withdraw_tasks") or 0))
     res = await create_withdrawal(uid, amount, need)
@@ -280,7 +400,8 @@ async def withdraw_confirm(call: CallbackQuery):
         return
     await send(
         call.message.chat.id,
-        f"⏳ Чтобы вывести {amount} ⭐, выполни {need} заданий. "
+        f"⏳ Чтобы вывести {amount} ⭐, выполни {need} "
+        f"{plural(need, 'задание', 'задания', 'заданий')}. "
         "Как только выполнишь, заявка создастся автоматически.",
         reply_markup=wd_cancel_kb())
     await send_task(call.message.chat.id, user_info(call.from_user))
@@ -319,7 +440,8 @@ async def daily_tasks(call: CallbackQuery):
 dp.message.outer_middleware(Gate())
 dp.callback_query.outer_middleware(Gate())
 for r in (admin.router, admin_ads.router, admin_stats.router,
-          admin_db.router, daily.router):
+          admin_db.router, daily.router, sources.admin_router,
+          sources.public_router):
     dp.include_router(r)
 
 
@@ -332,6 +454,7 @@ async def main():
     background = [
         asyncio.create_task(daily.daily_loop(bot)),
         asyncio.create_task(admin_db.backup_loop(bot)),
+        asyncio.create_task(penalty_loop()),
     ]
     try:
         await dp.start_polling(bot)

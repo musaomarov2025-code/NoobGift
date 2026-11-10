@@ -1,6 +1,9 @@
 import json
 import logging
 import re
+import uuid
+
+import aiohttp
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
@@ -8,7 +11,7 @@ from aiogram.types import (
     MessageEntity,
 )
 
-from database import count_ad_show, next_ad
+from database import count_ad_show, get_sponsor, next_ad
 
 LINE_RE = re.compile(r"^(.+?)\s+[-—–]\s+((?:https?://|t\.me/|tg://)\S+)$")
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
@@ -103,16 +106,38 @@ async def send_post(bot, chat_id, post, markup=None):
         link_preview_options=NO_PREVIEW)
 
 
-async def show_ad(bot, chat_id):
-    """Показывает пользователю следующий показ по кругу."""
-    ad = await next_ad()
-    if not ad:
+async def axionna_view(chat_id, greeting=False):
+    """Показ рекламы Axionna (сервер Axionna сам шлёт пост в этот чат).
+    Работает, если у сервиса axionna в «Спонсоры» есть ключ и он включён."""
+    s = await get_sponsor("axionna")
+    if not s or not s["enabled"] or not s["api_key"]:
         return
     try:
-        await send_post(bot, chat_id, ad_to_post(ad))
-        await count_ad_show(ad["id"])
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(
+                "https://axionna.org/api/views",
+                headers={"Authorization": f"Bearer {s['api_key']}"},
+                json={"chat_id": chat_id, "greeting": bool(greeting),
+                      "impression_id": uuid.uuid4().hex},
+            ) as r:
+                data = await r.json(content_type=None)
+        if not data.get("delivered"):
+            logging.info("axionna view not delivered: %s", data)
     except Exception as e:
-        logging.warning("ad %s send error: %s", ad["id"], e)
+        logging.warning("axionna view error: %s", e)
+
+
+async def show_ad(bot, chat_id):
+    """Показывает следующий твой показ по кругу, затем показ Axionna."""
+    ad = await next_ad()
+    if ad:
+        try:
+            await send_post(bot, chat_id, ad_to_post(ad))
+            await count_ad_show(ad["id"])
+        except Exception as e:
+            logging.warning("ad %s send error: %s", ad["id"], e)
+    await axionna_view(chat_id)
 
 
 async def safe_edit(call, text, kb=None):

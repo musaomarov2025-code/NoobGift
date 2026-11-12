@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -13,7 +14,7 @@ from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from ads import safe_edit
 from config import ADMIN_IDS, BACKUP_HOURS, DB_PATH, MSK
-from database import init_db
+from database import import_old_users, init_db
 from keyboards import back_kb, db_kb
 
 router = Router()
@@ -23,6 +24,7 @@ router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 class DbForm(StatesGroup):
     file = State()
+    json_file = State()
 
 
 def _backup_sync(dst):
@@ -82,7 +84,9 @@ async def db_menu(call: CallbackQuery, state: FSMContext):
         "💾 База данных\n\nСкачать: бот пришлёт файл базы.\n"
         "Загрузить: пришли файл .db, и он заменит текущую базу "
         "(старая сохранится как резервная копия).\n"
-        "Размер файла до 20 МБ.\n\n"
+        "Размер файла до 20 МБ.\n"
+        "Импорт из старого бота: пришли его .json, перенесу только "
+        "пользователей для рассылки.\n\n"
         f"Автокопия приходит каждые {BACKUP_HOURS} ч.",
         db_kb())
     await call.answer()
@@ -135,3 +139,52 @@ async def db_receive(message: Message, state: FSMContext, bot: Bot):
 @router.message(DbForm.file)
 async def db_wrong(message: Message):
     await message.answer("Пришли файл .db документом.")
+
+
+@router.callback_query(F.data == "db:imp")
+async def db_import(call: CallbackQuery, state: FSMContext):
+    await state.set_state(DbForm.json_file)
+    await safe_edit(
+        call,
+        "Пришли файл .json из старого бота документом.\n"
+        "Перенесу только пользователей (ID и юзернейм) для рассылки, "
+        "без балансов. Бонус за запуск они не получат.",
+        back_kb("adm:db"))
+    await call.answer()
+
+
+@router.message(DbForm.json_file, F.document)
+async def db_import_file(message: Message, state: FSMContext, bot: Bot):
+    doc = message.document
+    if doc.file_size and doc.file_size > 20 * 1024 * 1024:
+        await message.answer("Файл больше 20 МБ, Telegram не даст его "
+                             "скачать боту.")
+        return
+    tmp = os.path.join(tempfile.gettempdir(), "old_users.json")
+    await bot.download(doc, destination=tmp)
+    try:
+        with open(tmp, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        await message.answer("Не получилось прочитать файл: это не JSON. "
+                             "Пришли другой файл.")
+        return
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    items = data.get("users") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        await message.answer("В файле нет списка users. Пришли другой файл.")
+        return
+    added, skipped, bad = await import_old_users(items)
+    await state.clear()
+    await message.answer(
+        "✅ Импорт завершён\n"
+        f"Добавлено: {added}\n"
+        f"Уже были в базе: {skipped}\n"
+        f"Пропущено (нет ID): {bad}")
+
+
+@router.message(DbForm.json_file)
+async def db_import_wrong(message: Message):
+    await message.answer("Пришли файл .json документом.")

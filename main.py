@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from html import escape
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F
@@ -10,6 +11,7 @@ import admin
 import admin_ads
 import admin_db
 import admin_stats
+import builder
 import daily
 import sources
 import sponsors
@@ -22,7 +24,7 @@ from database import (
     check_ref_reward, count_refs, create_withdrawal, due_rechecks,
     finish_task, get_done_by_rid, get_setting, get_source, get_user,
     get_withdrawal, give_start_bonus, init_db, mark_checked, refund_task,
-    wait_progress,
+    touch_user, wait_progress,
 )
 from keyboards import (
     BTN_EARN, BTN_TASKS, BTN_WITHDRAW, main_kb, ref_kb, refund_kb,
@@ -82,6 +84,8 @@ class Gate(BaseMiddleware):
         row = await get_user(u.id)
         if row and row["banned"]:
             return
+        if row and time.time() - (row["last_seen"] or 0) > 300:
+            await touch_user(u.id)
         is_start = (isinstance(event, Message)
                     and (event.text or "").startswith("/start"))
         if not row and not is_start:
@@ -127,9 +131,9 @@ async def send_task(chat_id, info, with_ad=False):
 
 
 async def welcome(chat_id, info, bonus_text=None):
-    await send(chat_id, "⭐️", reply_markup=main_kb)
     if bonus_text:
-        await send(chat_id, bonus_text)
+        await send(chat_id, bonus_text)   # бонус всегда первым
+    await send(chat_id, "⭐️", reply_markup=main_kb)
     await send_ref(chat_id, info["id"])
     await send_task(chat_id, info)
 
@@ -439,7 +443,8 @@ async def daily_tasks(call: CallbackQuery):
 
 dp.message.outer_middleware(Gate())
 dp.callback_query.outer_middleware(Gate())
-for r in (admin.router, admin_ads.router, admin_stats.router,
+for r in (admin.router, builder.router, admin_ads.router,
+          admin_stats.router,
           admin_db.router, daily.router, sources.admin_router,
           sources.public_router):
     dp.include_router(r)
@@ -455,6 +460,8 @@ async def main():
         asyncio.create_task(daily.daily_loop(bot)),
         asyncio.create_task(admin_db.backup_loop(bot)),
         asyncio.create_task(penalty_loop()),
+        asyncio.create_task(daily.remind_loop(bot)),
+        asyncio.create_task(daily.report_loop(bot)),
     ]
     try:
         await dp.start_polling(bot)

@@ -5,7 +5,7 @@ import uuid
 
 import aiohttp
 
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions,
     MessageEntity,
@@ -15,6 +15,7 @@ from database import count_ad_show, get_sponsor, next_ad
 
 LINE_RE = re.compile(r"^(.+?)\s+[-—–]\s+((?:https?://|t\.me/|tg://)\S+)$")
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+STYLES = ("primary", "success", "danger")
 
 
 def parse_buttons(text):
@@ -42,10 +43,12 @@ def parse_buttons(text):
 def buttons_markup(buttons):
     if not buttons:
         return None
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=x["text"], url=x["url"]) for x in row]
-        for row in buttons
-    ])
+    def one(x):
+        kw = {"style": x["style"]} if x.get("style") in STYLES else {}
+        return InlineKeyboardButton(text=x["text"], url=x["url"], **kw)
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[one(x) for x in row] for row in buttons])
 
 
 def post_from_message(m):
@@ -78,10 +81,18 @@ def ad_to_post(row):
         "text": row["text"] or "",
         "entities": json.loads(row["entities"] or "[]"),
         "buttons": json.loads(row["buttons"] or "[]"),
+        "sticker": row["sticker"],
     }
 
 
 async def send_post(bot, chat_id, post, markup=None):
+    if post.get("sticker"):
+        try:
+            await bot.send_sticker(chat_id, post["sticker"])
+        except TelegramForbiddenError:
+            raise
+        except Exception:
+            pass
     ents = [MessageEntity(**e) for e in post.get("entities") or []] or None
     kb = markup or buttons_markup(post.get("buttons"))
     kind = post["kind"]
@@ -101,6 +112,8 @@ async def send_post(bot, chat_id, post, markup=None):
     if kind == "sticker":
         return await bot.send_sticker(
             chat_id, post["file_id"], reply_markup=kb)
+    if not post.get("text"):
+        return None  # только стикер, без текста
     return await bot.send_message(
         chat_id, post["text"], entities=ents, reply_markup=kb,
         link_preview_options=NO_PREVIEW)

@@ -21,6 +21,9 @@ DB_PATH = f"/app/data/{DB_NAME}"
 
 BACKUP_HOURS = 6          # как часто бот присылает копию базы админу
 DAILY_HOUR_MSK = 16       # время ежедневного уведомления (по Москве)
+REMIND_HOUR_MSK = 17      # напоминание неактивным (по Москве)
+REMIND_EVERY_DAYS = 5     # как часто напоминать одному человеку
+REPORT_HOUR_MSK = 9       # утренний отчёт админу (по Москве)
 WITHDRAW_OPTIONS = [15, 20, 50, 100]
 
 MSK = timezone(timedelta(hours=3))
@@ -71,6 +74,21 @@ DEFAULTS = {
     "payout_channel": "",     # канал выплат (@канал или ID)
     "withdraw_tasks": "3",    # сколько заданий выполнить для вывода
     "start_bonus": "2",       # звёзд за запуск бота (один раз)
+    "remind_enabled": "1",
+    "remind_style": "success",
+    "remind_text": (
+        "👋 <b>{name}, ты давно не заходил!</b>\n\n"
+        "На твоём балансе {balance} ⭐️. "
+        "Выполни пару заданий и выведи их 👇"
+    ),
+    "remind_text_zero": (
+        "⭐️ <b>Тебя давно не было!</b>\n\n"
+        "За это время появились новые задания. "
+        "Заходи и забирай звёзды 👇"
+    ),
+    "report_enabled": "1",
+    "daily_style_ref": "",
+    "daily_style_tasks": "",
     "ads_pointer": "0",
     "daily_enabled": "1",
     "daily_last": "",

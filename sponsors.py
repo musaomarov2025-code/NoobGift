@@ -12,6 +12,7 @@ BotoHub, DarkBoost, SubGram. (Axionna работает только с пока�
         yes: выполнено/подписан, no: явно отписан или не выполнено,
         unk: сервис не сказал определённо
 """
+import contextvars
 import time
 
 import aiohttp
@@ -29,6 +30,8 @@ skipped_rids = {}   # user_id -> {id ресурсов пропущенных з�
 fails = {}
 empties = {}
 last_alert = {}
+last_raw = {}   # последний ответ сервиса (для предупреждений)
+_current_sponsor = contextvars.ContextVar("sponsor", default=None)
 alert_cb = None
 ALERT_EVERY = 6 * 3600   # не чаще раза в 6 часов на один сервис
 FAILS_LIMIT = 5
@@ -94,7 +97,11 @@ async def _post(url, headers, payload, key_errors=(401, 403)):
         async with s.post(url, json=payload, headers=headers) as r:
             if r.status in key_errors:
                 raise RuntimeError(f"HTTP {r.status}: ключ не принят")
-            return await r.json(content_type=None)
+            data = await r.json(content_type=None)
+            name = _current_sponsor.get()
+            if name:
+                last_raw[name] = f"HTTP {r.status}: {str(data)[:300]}"
+            return data
 
 
 def _task(sponsor, tid, text, url, **extra):
@@ -492,10 +499,12 @@ async def get_next_task(user):
         fetch = FETCHERS.get(s["name"])
         if not fetch:
             continue
+        _current_sponsor.set(s["name"])
         try:
             tasks = await fetch(user, s["api_key"])
         except Exception as e:
-            print(f"[{s['name']}] fetch error: {e}")
+            err = str(e) or type(e).__name__   # у таймаута текст пустой
+            print(f"[{s['name']}] fetch error: {err}")
             n = fails[s["name"]] = fails.get(s["name"], 0) + 1
             if n >= FAILS_LIMIT:
                 if "ключ не принят" in str(e):
@@ -505,7 +514,7 @@ async def get_next_task(user):
                 else:
                     msg = (f"⚠️ {s['name']}: сервис не отвечает или "
                            f"отвечает с ошибкой ({n} раз подряд).\n"
-                           f"Последняя ошибка: {e}")
+                           f"Последняя ошибка: {err}")
                 await _alert(s["name"], "err", msg)
             continue
         fails[s["name"]] = 0
@@ -520,7 +529,8 @@ async def get_next_task(user):
                     "Это не всегда поломка: люди могли выполнить всё, "
                     "у сервиса может быть время обновления или "
                     "ограничения по языку и стране. Если так всё время, "
-                    "проверь настройки бота в кабинете сервиса.")
+                    "проверь настройки бота в кабинете сервиса.\n"
+                    f"Последний ответ сервиса: {last_raw.get(s['name'], 'нет')}")
         for task in tasks or []:
             tid = full_id(task)
             if tid in exclude or await is_task_done(uid, tid):

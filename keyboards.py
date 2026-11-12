@@ -24,8 +24,21 @@ def ik(rows):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def b(text, data):
-    return InlineKeyboardButton(text=text, callback_data=data)
+# Цвета кнопок (Bot API 9.4): синяя, зелёная, красная. Пусто = обычная.
+STYLES = ("primary", "success", "danger")
+
+
+def _style(style):
+    return {"style": style} if style in STYLES else {}
+
+
+def b(text, data, style=None):
+    return InlineKeyboardButton(
+        text=text, callback_data=data, **_style(style))
+
+
+def ub(text, url, style=None):
+    return InlineKeyboardButton(text=text, url=url, **_style(style))
 
 
 # ---------- для пользователей ----------
@@ -35,16 +48,15 @@ def ref_kb(link):
         "https://t.me/share/url?url=" + quote(link)
         + "&text=" + quote("Забирай бесплатные звёзды! ⭐")
     )
-    return ik([[InlineKeyboardButton(
-        text="Отправить ссылку друзьям", url=share)]])
+    return ik([[ub("Отправить ссылку друзьям", share, "primary")]])
 
 
 def task_kb(url):
     first = []
     if url:
-        first.append(InlineKeyboardButton(text="🔎 Перейти", url=url))
-    first.append(b("✅ Подтвердить", "task_check"))
-    return ik([first, [b("⏩ Пропустить", "task_skip")]])
+        first.append(ub("🔎 Перейти", url, "primary"))
+    first.append(b("✅ Подтвердить", "task_check", "success"))
+    return ik([first, [b("⏩ Пропустить", "task_skip", "danger")]])
 
 
 def withdraw_kb():
@@ -53,14 +65,14 @@ def withdraw_kb():
 
 
 def refund_kb(rid):
-    return ik([[b("👉 Вернуть Звезды ⭐", f"refund:{rid}")]])
+    return ik([[b("👉 Вернуть Звезды ⭐", f"refund:{rid}", "success")]])
 
 
 def refund_task_kb(url, rid):
     first = []
     if url:
-        first.append(InlineKeyboardButton(text="🔎 Перейти", url=url))
-    first.append(b("✅ Подтвердить", f"refundchk:{rid}"))
+        first.append(ub("🔎 Перейти", url, "primary"))
+    first.append(b("✅ Подтвердить", f"refundchk:{rid}", "success"))
     return ik([first])
 
 
@@ -101,7 +113,7 @@ def admin_kb():
         [b("📣 Показы", "adm:ads"), b("📨 Рассылка", "adm:bc")],
         [b("🎯 Ежедневное", "adm:daily"), b("💸 Заявки", "adm:reqs")],
         [b("📊 Статистика", "adm:stats"), b("💾 База данных", "adm:db")],
-        [b("📈 Источники", "adm:src")],
+        [b("📈 Источники", "adm:src"), b("🔔 Напоминания", "adm:rem")],
     ])
 
 
@@ -158,7 +170,7 @@ def ad_menu_kb(ad):
     i = ad["id"]
     return ik([
         [b(onoff, f"ad:tg:{i}")],
-        [b("✏️ Пост", f"ad:ep:{i}"), b("🔘 Кнопки", f"ad:eb:{i}")],
+        [b("✏️ Изменить", f"ad:edit:{i}")],
         [b("🗑 Удалить", f"ad:del:{i}")],
         [b("⬅️ К списку", "adm:ads")],
     ])
@@ -174,7 +186,7 @@ def ad_save_kb():
 
 
 def wd_cancel_kb():
-    return ik([[b("❌ Отменить вывод", "wd_cancel")]])
+    return ik([[b("❌ Отменить вывод", "wd_cancel", "danger")]])
 
 
 def bc_groups_kb(counts):
@@ -199,7 +211,32 @@ def daily_kb(enabled):
     return ik([
         [b(onoff, "daily:toggle")],
         [b("✏️ Текст", "daily:text"), b("🔘 Кнопки", "daily:btns")],
+        [b("🎨 Цвета кнопок", "daily:col")],
         [b("📤 Тест мне", "daily:test")],
+        [b("⬅️ Назад", "adm:back")],
+    ])
+
+
+def color_kb(prefix, back):
+    """Выбор цвета кнопки: колбэк prefix:none|primary|success|danger."""
+    return ik([
+        [b("⚪ Обычная", f"{prefix}:none"), b("🔵 Синяя", f"{prefix}:primary")],
+        [b("🟢 Зелёная", f"{prefix}:success"),
+         b("🔴 Красная", f"{prefix}:danger")],
+        [b("⬅️ Назад", back)],
+    ])
+
+
+def rem_kb(rem_on, rep_on):
+    r1 = "🔕 Выключить напоминание" if rem_on else "🔔 Включить напоминание"
+    r2 = "🔕 Выключить отчёт" if rep_on else "🔔 Включить отчёт"
+    return ik([
+        [b(r1, "rem:tg")],
+        [b("✏️ Текст (есть баланс)", "rem:t1")],
+        [b("✏️ Текст (баланс 0)", "rem:t0")],
+        [b("🎨 Цвет кнопки", "rem:col"), b("📤 Тест мне", "rem:test")],
+        [b(r2, "rem:rp")],
+        [b("📊 Отчёт сейчас", "rem:now")],
         [b("⬅️ Назад", "adm:back")],
     ])
 
@@ -253,5 +290,6 @@ def user_tools_kb(uid, banned):
 def db_kb():
     return ik([
         [b("⬇️ Скачать БД", "db:dl"), b("⬆️ Загрузить БД", "db:ul")],
+        [b("📥 Импорт из старого бота (.json)", "db:imp")],
         [b("⬅️ Назад", "adm:back")],
     ])

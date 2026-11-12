@@ -1,6 +1,6 @@
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS users(
     created_at INTEGER DEFAULT 0, verified INTEGER DEFAULT 1,
     banned INTEGER DEFAULT 0, blocked INTEGER DEFAULT 0,
     ip_hash TEXT, fp TEXT, lang TEXT, premium INTEGER DEFAULT 0,
-    source TEXT, bonus INTEGER DEFAULT 0
+    source TEXT, bonus INTEGER DEFAULT 0,
+    last_seen INTEGER DEFAULT 0, reminded_at INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS sponsors(
@@ -39,7 +40,8 @@ CREATE TABLE IF NOT EXISTS withdrawals(
 );
 CREATE TABLE IF NOT EXISTS ads(
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, file_id TEXT,
-    text TEXT, entities TEXT, buttons TEXT, enabled INTEGER DEFAULT 1
+    text TEXT, entities TEXT, buttons TEXT, enabled INTEGER DEFAULT 1,
+    sticker TEXT
 );
 CREATE TABLE IF NOT EXISTS ad_shows(
     ad_id INTEGER, day TEXT, n INTEGER DEFAULT 0,
@@ -58,7 +60,10 @@ MIGRATE = {
         "blocked": "INTEGER DEFAULT 0", "ip_hash": "TEXT", "fp": "TEXT",
         "lang": "TEXT", "premium": "INTEGER DEFAULT 0",
         "source": "TEXT", "bonus": "INTEGER DEFAULT 0",
+        "last_seen": "INTEGER DEFAULT 0",
+        "reminded_at": "INTEGER DEFAULT 0",
     },
+    "ads": {"sticker": "TEXT"},
     "withdrawals": {
         "created_at": "INTEGER DEFAULT 0",
         "processed_at": "INTEGER DEFAULT 0",
@@ -474,11 +479,12 @@ async def top_referrers(limit=10):
 
 async def add_ad(post):
     await _exec(
-        "INSERT INTO ads(kind, file_id, text, entities, buttons) "
-        "VALUES(?,?,?,?,?)",
+        "INSERT INTO ads(kind, file_id, text, entities, buttons, sticker) "
+        "VALUES(?,?,?,?,?,?)",
         (post["kind"], post.get("file_id"), post.get("text") or "",
          json.dumps(post.get("entities") or [], ensure_ascii=False),
-         json.dumps(post.get("buttons") or [], ensure_ascii=False)))
+         json.dumps(post.get("buttons") or [], ensure_ascii=False),
+         post.get("sticker")))
 
 
 async def list_ads():
@@ -490,7 +496,8 @@ async def get_ad(ad_id):
 
 
 async def update_ad(ad_id, **fields):
-    allowed = {"kind", "file_id", "text", "entities", "buttons", "enabled"}
+    allowed = {"kind", "file_id", "text", "entities", "buttons", "enabled",
+               "sticker"}
     keys = [k for k in fields if k in allowed]
     if not keys:
         return
@@ -648,4 +655,101 @@ async def source_stats(name):
     s["tasks_today"] = await _val(base + " AND d.ts>=?", (n, day_start()))
     s["unsub"] = await _val(
         base + " AND d.unsub=1 AND d.refunded=0", (n,))
+    return s
+
+
+# ---------- активность, напоминания, отчёт, импорт ----------
+
+async def touch_user(user_id):
+    await _exec("UPDATE users SET last_seen=? WHERE user_id=?",
+                (_now(), user_id))
+
+
+async def remind_candidates(limit=3000):
+    """Заходил 3–30 дней назад и давно не получал напоминание."""
+    now = _now()
+    return await _rows(
+        "SELECT user_id, first_name, balance FROM users "
+        "WHERE banned=0 AND blocked=0 AND last_seen>=? AND last_seen<=? "
+        "AND reminded_at<=? LIMIT ?",
+        (now - 30 * 86400, now - 3 * 86400, now - 5 * 86400 + 3600, limit))
+
+
+async def mark_reminded(user_id):
+    await _exec("UPDATE users SET reminded_at=? WHERE user_id=?",
+                (_now(), user_id))
+
+
+def _parse_ts(s):
+    try:
+        dt = datetime.fromisoformat(str(s))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except Exception:
+        return _now()
+
+
+async def import_old_users(items):
+    """Перенос людей из файла старого бота: только ID и юзернейм.
+    Бонус за запуск им не положен (bonus=1). Возвращает
+    (добавлено, уже были, без ID)."""
+    added = skipped = bad = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        for it in items:
+            if not isinstance(it, dict):
+                bad += 1
+                continue
+            try:
+                uid = int(it["user_id"])
+            except (KeyError, TypeError, ValueError):
+                bad += 1
+                continue
+            c = await db.execute(
+                "INSERT OR IGNORE INTO users(user_id, username, created_at, "
+                "bonus, verified) VALUES(?,?,?,1,1)",
+                (uid, it.get("username") or None,
+                 _parse_ts(it.get("registered_at"))))
+            if c.rowcount:
+                added += 1
+            else:
+                skipped += 1
+        await db.commit()
+    return added, skipped, bad
+
+
+async def report_stats(start, end):
+    """Цифры для отчёта админу за период [start, end)."""
+    s = {}
+    s["users"] = await _val("SELECT COUNT(*) FROM users")
+    s["new"] = await _val(
+        "SELECT COUNT(*) FROM users WHERE created_at>=? AND created_at<?",
+        (start, end))
+    rows = await _rows(
+        "SELECT substr(task_id,1,instr(task_id,':')-1) AS sp, COUNT(*) AS n "
+        "FROM done_tasks WHERE ts>=? AND ts<? GROUP BY sp ORDER BY n DESC",
+        (start, end))
+    s["by_sponsor"] = [(r["sp"], r["n"]) for r in rows]
+    s["tasks"] = sum(n for _, n in s["by_sponsor"])
+    s["unsub"] = await _val(
+        "SELECT COUNT(*) FROM done_tasks WHERE ts>=? AND ts<? "
+        "AND unsub=1 AND refunded=0", (start, end))
+
+    async def pair(sql, args=()):
+        r = await _row(sql, args)
+        return (r[0], r[1]) if r else (0, 0)
+
+    s["created"] = await pair(
+        "SELECT COUNT(*), COALESCE(SUM(amount),0) FROM withdrawals "
+        "WHERE status IN ('new','paid','rejected') "
+        "AND created_at>=? AND created_at<?", (start, end))
+    s["paid"] = await pair(
+        "SELECT COUNT(*), COALESCE(SUM(amount),0) FROM withdrawals "
+        "WHERE status='paid' AND processed_at>=? AND processed_at<?",
+        (start, end))
+    s["pending"] = await pair(
+        "SELECT COUNT(*), COALESCE(SUM(amount),0) FROM withdrawals "
+        "WHERE status='new'")
+    s["balance"] = await _val(
+        "SELECT COALESCE(SUM(balance),0) FROM users")
     return s

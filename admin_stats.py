@@ -64,6 +64,8 @@ def card_body(c, need):
         f"📅 Регистрация: {fmt_ts(u['created_at'])}",
         f"🚫 Бан: {'да' if u['banned'] else 'нет'}",
     ]
+    if u["fake_by"]:
+        lines.append(f"🚩 Сервисы пометили фейком: {u['fake_by']}")
     fl = flags(c, need)
     if fl:
         lines += [""] + fl
@@ -223,6 +225,7 @@ async def stats(call: CallbackQuery, state: FSMContext):
     text = (
         "📊 Статистика\n\n"
         f"👥 Пользователи: {s['users']}\n"
+        f"🚩 Помечены фейком сервисами: {s['fakes']}\n"
         f"➕ Новых: сегодня {s['new_today']}, за 7 дней {s['new_week']}\n\n"
         f"📋 Заданий выполнено: всего {s['tasks_total']}, "
         f"сегодня {s['tasks_today']}\n"

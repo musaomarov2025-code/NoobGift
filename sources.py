@@ -32,10 +32,15 @@ class SrcForm(StatesGroup):
     owner = State()
 
 
-async def source_text(bot: Bot, row):
+async def source_text(bot: Bot, row, admin=False):
     s = await source_stats(row["name"])
     me = await bot.me()
     counted = s["tasks_total"] - s["unsub"]
+    fakes = ""
+    if admin:   # долю фейков видит только админ
+        pct = round(100 * s["fakes"] / s["users"]) if s["users"] else 0
+        fakes = (f"🚩 Фейков (по версии сервисов): {s['fakes']} из "
+                 f"{s['users']} ({pct}%)\n")
     return (
         f"📈 Источник: {row['name']}\n\n"
         f"👥 Пришло: всего {s['users']}, сегодня {s['new_today']}, "
@@ -43,7 +48,8 @@ async def source_text(bot: Bot, row):
         f"✅ Заданий выполнено: всего {s['tasks_total']}, "
         f"сегодня {s['tasks_today']}\n"
         f"❌ Отписалось: {s['unsub']}\n"
-        f"💎 Засчитано: {counted}\n\n"
+        f"💎 Засчитано: {counted}\n"
+        f"{fakes}\n"
         f"🔗 Ссылка: https://t.me/{me.username}?start={row['name']}\n"
         f"👤 Владелец: @{row['owner']}\n\n"
         f"Обновлено: {datetime.now(MSK):%H:%M} МСК"
@@ -71,8 +77,9 @@ async def stat_cmd(message: Message, bot: Bot):
     if not allowed(message.from_user, row):
         await message.answer("Нет доступа к этой статистике.")
         return
-    await message.answer(await source_text(bot, row),
-                         reply_markup=stat_kb(row["name"]))
+    await message.answer(
+        await source_text(bot, row, message.from_user.id in ADMIN_IDS),
+        reply_markup=stat_kb(row["name"]))
 
 
 @public_router.callback_query(F.data.startswith("srcupd:"))
@@ -81,8 +88,9 @@ async def stat_update(call: CallbackQuery, bot: Bot):
     if not row or not allowed(call.from_user, row):
         await call.answer("Нет доступа", show_alert=True)
         return
-    await safe_edit(call, await source_text(bot, row),
-                    stat_kb(row["name"]))
+    await safe_edit(
+        call, await source_text(bot, row, call.from_user.id in ADMIN_IDS),
+        stat_kb(row["name"]))
     await call.answer("Обновлено")
 
 
@@ -136,7 +144,7 @@ async def src_owner(message: Message, state: FSMContext, bot: Bot):
     await create_source(name, owner)
     await state.clear()
     row = await get_source(name)
-    await message.answer(await source_text(bot, row),
+    await message.answer(await source_text(bot, row, True),
                          reply_markup=source_kb(name))
 
 
@@ -146,7 +154,7 @@ async def src_open(call: CallbackQuery, bot: Bot):
     if not row:
         await call.answer("Источник не найден", show_alert=True)
         return
-    await safe_edit(call, await source_text(bot, row),
+    await safe_edit(call, await source_text(bot, row, True),
                     source_kb(row["name"]))
     await call.answer()
 

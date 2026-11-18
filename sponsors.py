@@ -17,7 +17,9 @@ import time
 
 import aiohttp
 
-from database import get_sponsor, get_sponsors, get_user, is_task_done
+from database import (
+    get_sponsor, get_sponsors, get_user, is_task_done, mark_fake,
+)
 
 # True, если бот подключён к PiarFlow без токена бота
 PIARFLOW_NO_TOKEN = False
@@ -31,11 +33,12 @@ fails = {}
 empties = {}
 last_alert = {}
 last_raw = {}   # последний ответ сервиса (для предупреждений)
+fake_hits = {}  # user_id -> {сервисы, назвавшие его фейком}
+fake_known = set()   # (user_id, сервис), уже записанные в базу
 _current_sponsor = contextvars.ContextVar("sponsor", default=None)
 alert_cb = None
 ALERT_EVERY = 6 * 3600   # не чаще раза в 6 часов на один сервис
 FAILS_LIMIT = 5
-EMPTY_LIMIT = 30
 
 DEFAULT_TEXT = "Выполни задание и нажми «Подтвердить»"
 TYPE_TEXT = {
@@ -102,6 +105,21 @@ async def _post(url, headers, payload, key_errors=(401, 403)):
             if name:
                 last_raw[name] = f"HTTP {r.status}: {str(data)[:300]}"
             return data
+
+
+def _flag_fake(user_id, sponsor):
+    fake_hits.setdefault(user_id, set()).add(sponsor)
+
+
+async def _record_fakes(user_id):
+    for name in fake_hits.pop(user_id, ()):
+        if (user_id, name) in fake_known:
+            continue
+        fake_known.add((user_id, name))
+        try:
+            await mark_fake(user_id, name)
+        except Exception as e:
+            print(f"mark_fake error: {e}")
 
 
 def _task(sponsor, tid, text, url, **extra):
@@ -310,6 +328,8 @@ async def _flowly_offers(user, key):
 
 async def fetch_flowly(user, key):
     data = await _flowly_offers(user, key)
+    if data.get("reason") == "fake_subscriber":
+        _flag_fake(user["id"], "flowly")
     if data.get("status") == "ok":
         await _post(f"{FW}/reset_offers", {"Auth": key},
                     {"tg_user_id": user["id"]}, key_errors=(401,))
@@ -349,6 +369,8 @@ async def _bh(key, uid, **extra):
 
 async def fetch_botohub(user, key):
     data = await _bh(key, user["id"])
+    if data.get("fake"):
+        _flag_fake(user["id"], "botohub")
     if data.get("fake") or data.get("skip") or data.get("completed"):
         return []
     links = (data.get("tasks") or [])[:1]
@@ -429,6 +451,8 @@ async def fetch_subgram(user, key):
     if ex:
         payload["exclude_resource_ids"] = ex[:500]
     data = await _post(SG, {"Auth": key}, payload)
+    if "фейк" in str(data.get("message", "")).lower():
+        _flag_fake(user["id"], "subgram")
     out = []
     for s in _sg_sponsors(data):
         if s.get("status") != "unsubscribed":
@@ -492,7 +516,15 @@ def full_id(task):
 
 
 async def get_next_task(user):
-    """Берёт задание у первого по приоритету включённого спонсора."""
+    """Берёт задание у первого по приоритету включённого спонсора.
+    Заодно запоминает, если сервис назвал человека фейком."""
+    try:
+        return await _next_task(user)
+    finally:
+        await _record_fakes(user["id"])
+
+
+async def _next_task(user):
     uid = user["id"]
     exclude = skipped.setdefault(uid, set())
     for s in await get_sponsors(only_active=True):
@@ -521,16 +553,7 @@ async def get_next_task(user):
         if tasks:
             empties[s["name"]] = 0
         else:
-            n = empties[s["name"]] = empties.get(s["name"], 0) + 1
-            if n >= EMPTY_LIMIT:
-                await _alert(
-                    s["name"], "empty",
-                    f"⚠️ {s['name']}: {n} запросов подряд без заданий.\n"
-                    "Это не всегда поломка: люди могли выполнить всё, "
-                    "у сервиса может быть время обновления или "
-                    "ограничения по языку и стране. Если так всё время, "
-                    "проверь настройки бота в кабинете сервиса.\n"
-                    f"Последний ответ сервиса: {last_raw.get(s['name'], 'нет')}")
+            empties[s["name"]] = empties.get(s["name"], 0) + 1
         for task in tasks or []:
             tid = full_id(task)
             if tid in exclude or await is_task_done(uid, tid):

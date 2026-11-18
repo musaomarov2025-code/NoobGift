@@ -199,6 +199,13 @@ async def report_text(start, end, title):
         f"👥 Новых: {s['new']} (всего {s['users']})",
         f"📋 Заданий: {s['tasks']} ({by})",
         f"❌ Из них отписалось: {s['unsub']}", "",
+        f"👣 Заходили: {s['active']}, выполняли задания: "
+        f"{s['with_tasks']}",
+        f"🚩 Сервисы пометили фейком: новых {s['fake_new']}, всего "
+        f"{s['fake_total']} (из заходивших без заданий: "
+        f"{s['fake_idle']})",
+        f"🙈 Без заданий по другим причинам: "
+        f"{max(s['active'] - s['with_tasks'] - s['fake_idle'], 0)}", "",
         f"💸 Заявки: создано {_money(s['created'])}, "
         f"выплачено {_money(s['paid'])}",
         f"⏳ Ждут выплаты: {_money(s['pending'])}",
@@ -210,11 +217,8 @@ async def report_text(start, end, title):
         if name not in sponsors.FETCHERS:
             continue
         f_ = sponsors.fails.get(name, 0)
-        e_ = sponsors.empties.get(name, 0)
         if f_ >= 1:
             lines.append(f"⚠️ {name}: ошибок подряд {f_}")
-        elif e_ >= 10:
-            lines.append(f"⚠️ {name}: без заданий {e_} раз подряд")
         else:
             lines.append(f"✅ {name}")
     return "\n".join(lines)

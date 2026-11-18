@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS users(
     banned INTEGER DEFAULT 0, blocked INTEGER DEFAULT 0,
     ip_hash TEXT, fp TEXT, lang TEXT, premium INTEGER DEFAULT 0,
     source TEXT, bonus INTEGER DEFAULT 0,
-    last_seen INTEGER DEFAULT 0, reminded_at INTEGER DEFAULT 0
+    last_seen INTEGER DEFAULT 0, reminded_at INTEGER DEFAULT 0,
+    fake_at INTEGER DEFAULT 0, fake_by TEXT
 );
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS sponsors(
@@ -62,6 +63,7 @@ MIGRATE = {
         "source": "TEXT", "bonus": "INTEGER DEFAULT 0",
         "last_seen": "INTEGER DEFAULT 0",
         "reminded_at": "INTEGER DEFAULT 0",
+        "fake_at": "INTEGER DEFAULT 0", "fake_by": "TEXT",
     },
     "ads": {"sticker": "TEXT"},
     "withdrawals": {
@@ -454,6 +456,7 @@ async def get_stats():
     s["by_sponsor"] = [(r["sp"], r["n"]) for r in rows]
     s["unsub"] = await _val(
         "SELECT COUNT(*) FROM done_tasks WHERE unsub=1 AND refunded=0")
+    s["fakes"] = await _val("SELECT COUNT(*) FROM users WHERE fake_at>0")
     s["paid_sum"] = await _val(
         "SELECT COALESCE(SUM(amount),0) FROM withdrawals "
         "WHERE status='paid'")
@@ -655,6 +658,8 @@ async def source_stats(name):
     s["tasks_today"] = await _val(base + " AND d.ts>=?", (n, day_start()))
     s["unsub"] = await _val(
         base + " AND d.unsub=1 AND d.refunded=0", (n,))
+    s["fakes"] = await _val(
+        "SELECT COUNT(*) FROM users WHERE source=? AND fake_at>0", (n,))
     return s
 
 
@@ -752,4 +757,37 @@ async def report_stats(start, end):
         "WHERE status='new'")
     s["balance"] = await _val(
         "SELECT COALESCE(SUM(balance),0) FROM users")
+    # активность и фейки за период
+    s["active"] = await _val(
+        "SELECT COUNT(*) FROM users WHERE last_seen>=? AND last_seen<?",
+        (start, end))
+    s["with_tasks"] = await _val(
+        "SELECT COUNT(DISTINCT user_id) FROM done_tasks "
+        "WHERE ts>=? AND ts<?", (start, end))
+    s["fake_new"] = await _val(
+        "SELECT COUNT(*) FROM users WHERE fake_at>=? AND fake_at<?",
+        (start, end))
+    s["fake_total"] = await _val(
+        "SELECT COUNT(*) FROM users WHERE fake_at>0")
+    s["fake_idle"] = await _val(
+        "SELECT COUNT(*) FROM users u WHERE u.last_seen>=? "
+        "AND u.last_seen<? AND u.fake_at>0 AND NOT EXISTS("
+        "SELECT 1 FROM done_tasks d WHERE d.user_id=u.user_id "
+        "AND d.ts>=? AND d.ts<?)", (start, end, start, end))
     return s
+
+
+async def mark_fake(user_id, sponsor):
+    """Сервис пометил человека как фейкового (только для статистики)."""
+    row = await _row(
+        "SELECT fake_by FROM users WHERE user_id=?", (user_id,))
+    if not row:
+        return
+    have = [x for x in (row["fake_by"] or "").split(",") if x]
+    if sponsor in have:
+        return
+    have.append(sponsor)
+    await _exec(
+        "UPDATE users SET fake_by=?, "
+        "fake_at=CASE WHEN fake_at>0 THEN fake_at ELSE ? END "
+        "WHERE user_id=?", (",".join(have), _now(), user_id))
